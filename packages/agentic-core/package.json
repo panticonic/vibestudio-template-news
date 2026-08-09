@@ -1,0 +1,18 @@
+{
+  "name": "@workspace/agentic-core",
+  "version": "0.1.0",
+  "description": "Headless agentic session management — shared business logic (no React)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
+    "@workspace/eval": "workspace:*",
+    "@workspace/model-catalog": "workspace:*",
+    "@workspace/pubsub": "workspace:*"
+  }
+}

@@ -1,0 +1,279 @@
+/**
+ * Unified token layer above Radix Themes - ONE source for motion, semantic
+ * color, surface/elevation, and the centralized keyframes + reduced-motion
+ * block. Import once near the app/panel root:
+ *
+ *   import "@workspace/ui/tokens.css";
+ *
+ * Everything keys off Radix semantic scales so it reads correctly in both light
+ * and dark theme without branching. No hard-coded palette hex.
+ */
+
+.radix-themes,
+:root {
+  /* Motion */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-emphasized: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+
+  /* Semantic intent (status / consent), mapped onto Radix scales */
+  --intent-info: var(--blue-9);
+  --intent-info-surface: var(--blue-a3);
+  --intent-info-border: var(--blue-a6);
+  --intent-success: var(--grass-9);
+  --intent-success-surface: var(--grass-a3);
+  --intent-success-border: var(--grass-a6);
+  --intent-warning: var(--amber-9);
+  --intent-warning-surface: var(--amber-a3);
+  --intent-warning-border: var(--amber-a6);
+  --intent-error: var(--red-9);
+  --intent-error-surface: var(--red-a3);
+  --intent-error-border: var(--red-a6);
+  --intent-consent: var(--iris-9);
+  --intent-consent-surface: var(--iris-a3);
+  --intent-consent-border: var(--iris-a6);
+
+  /* Vibestudio brand language: violet-to-pink energy over mauve-neutral surfaces. */
+  --brand-ink: var(--gray-12);
+  --brand-ink-contrast: var(--gray-1);
+  --brand-violet: var(--violet-9);
+  --brand-magenta: var(--pink-9);
+  --brand-spark: var(--pink-9);
+  --brand-spark-soft: var(--pink-a4);
+  --brand-glow: var(--violet-a5);
+  --brand-gradient: linear-gradient(
+    135deg,
+    var(--brand-violet) 0%,
+    var(--purple-9) 52%,
+    var(--brand-magenta) 100%
+  );
+
+  /* Approval tones (sky / amber / red) share the semantic vocabulary. */
+  --approval-info: var(--sky-9);
+  --approval-info-surface: var(--sky-a3);
+  --approval-warning: var(--amber-9);
+  --approval-warning-surface: var(--amber-a3);
+  --approval-danger: var(--red-9);
+  --approval-danger-surface: var(--red-a3);
+
+  /* "You" / client accent follows the primary violet identity. */
+  --you-accent: var(--violet-9);
+  --you-accent-strong: var(--violet-10);
+  --you-rail: var(--violet-a7);
+  --you-surface: var(--violet-a2);
+  --you-surface-strong: var(--violet-a3);
+
+  /* Surface & elevation - a small named set replacing ad-hoc card vars */
+  --surface-chrome: var(--gray-2);
+  --surface-panel: var(--color-panel-translucent, var(--gray-1));
+  --surface-card: var(--gray-2);
+  --surface-raised: var(--color-panel-solid, var(--gray-1));
+  --surface-border: var(--gray-a6);
+  --surface-border-strong: var(--gray-a8);
+  --elevation-1: 0 1px 2px var(--black-a3), 0 1px 1px var(--black-a2);
+  --elevation-2: 0 4px 12px var(--black-a4), 0 2px 4px var(--black-a3);
+  --elevation-overlay: 0 12px 40px var(--black-a6), 0 4px 12px var(--black-a4);
+
+  /* Scrollbars. The platform default paints a wide grooved track that reads as
+     a seam against our surfaces, so every scroller in the shell and in panels
+     gets the slim treatment below. Override these on a subtree (not the rules)
+     when a surface needs a different weight. */
+  --scrollbar-size: 10px;
+  --scrollbar-inset: 3px;
+  --scrollbar-thumb: color-mix(in srgb, var(--gray-10) 38%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--gray-11) 68%, transparent);
+
+  /* Stacking-context policy (one overlay hierarchy) */
+  --z-chrome: 10;
+  --z-approval-bar: 50;
+  --z-popover: 100;
+  --z-dialog: 200;
+  --z-toast: 300;
+  --z-tooltip: 400;
+}
+
+.radix-themes:where(.dark, .dark-theme),
+:root {
+  --brand-tile-border: var(--violet-a6);
+  --brand-tile-shadow: 0 8px 24px var(--violet-a4), 0 2px 8px var(--black-a4);
+}
+
+.radix-themes:where(.light, .light-theme) {
+  --brand-tile-border: var(--violet-a6);
+  --brand-tile-shadow: 0 8px 24px var(--violet-a4), 0 2px 8px var(--pink-a3);
+}
+
+.vibestudio-logo {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.vibestudio-logo-tile {
+  border: 1px solid var(--brand-tile-border);
+  border-radius: 22%;
+  background: var(--surface-raised);
+  box-shadow: var(--brand-tile-shadow);
+}
+
+.vibestudio-logo-symbol,
+.vibestudio-logo-logo {
+  background: transparent;
+}
+
+.vibestudio-logo-img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.vibestudio-logo-tile .vibestudio-logo-img {
+  object-fit: cover;
+}
+
+.radix-themes:where(.light, .light-theme) .vibestudio-logo-img-dark,
+.radix-themes:where(.dark, .dark-theme) .vibestudio-logo-img-light {
+  display: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(.dark):not(.dark-theme) .vibestudio-logo-img-dark {
+    display: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.light-theme) .vibestudio-logo-img-light {
+    display: none;
+  }
+}
+
+/* ONE global scrollbar treatment: a slim rounded thumb floating in a
+   transparent gutter, no track and no arrow buttons. An unqualified
+   pseudo-element means `*`, so this reaches every scroller — including the
+   document root — without per-component opt-in. Firefox gets the two standard
+   properties; Chromium (Electron) takes the `::-webkit-` rules, where the
+   transparent border plus `background-clip: padding-box` is what lets a 10px
+   gutter carry a ~4px thumb. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* Keep a grabbable target even when the content is very long. */
+  min-width: 28px;
+  min-height: 28px;
+  border: var(--scrollbar-inset) solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+/* Centralized keyframes */
+
+/* A receipt/ack icon resolving - a small satisfying pop. */
+@keyframes ack-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* One continuous lifecycle: an outbox card rises and lands in the transcript. */
+@keyframes lifecycle-rise {
+  0% {
+    transform: translateY(8px);
+    opacity: 0.4;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Ambient "agent is working" shimmer on the typing row. */
+@keyframes ambient-shimmer {
+  0% {
+    background-position: -160% 0;
+  }
+  100% {
+    background-position: 160% 0;
+  }
+}
+
+/* A retracted item collapsing before unmount. */
+@keyframes collapse-fade {
+  0% {
+    opacity: 1;
+    max-height: 240px;
+  }
+  100% {
+    opacity: 0;
+    max-height: 0;
+  }
+}
+
+/* Transient narration pill / undo snackbar entering. */
+@keyframes pill-in {
+  0% {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ONE reduced-motion block: collapse all motion to instant */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Coarse-pointer touch-target minimum (>=44px) */
+@media (pointer: coarse) {
+  .app-touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

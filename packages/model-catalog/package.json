@@ -1,0 +1,21 @@
+{
+  "name": "@workspace/model-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workspace model catalog types, recommendations, and provider connect presets",
+  "exports": {
+    "./catalog": "./src/catalog.ts",
+    "./localModels": "./src/localModels.ts",
+    "./modelRecommendations": "./src/modelRecommendations.ts",
+    "./providerConnect": "./src/providerConnect.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

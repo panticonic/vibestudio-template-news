@@ -1,0 +1,35 @@
+{
+  "name": "@workspace/agentic-chat",
+  "version": "0.1.0-git.7429c90",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./chat": "./components/AgenticChat.tsx",
+    "./error-boundary": "./components/ErrorBoundary.tsx",
+    "./types": "./types.ts",
+    "./styles.css": "./styles.css"
+  },
+  "dependencies": {
+    "@mdx-js/mdx": "^3.1.0",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
+    "@workspace/channel-fork": "workspace:*",
+    "@radix-ui/react-icons": "^1.3.2",
+    "@radix-ui/themes": "^3.2.1",
+    "@workspace/agentic-core": "workspace:*",
+    "@workspace/model-catalog": "workspace:*",
+    "@workspace/eval": "workspace:*",
+    "@workspace/tool-ui": "workspace:*",
+    "@workspace/ui": "workspace:*",
+    "highlight.js": "^11.11.1",
+    "mermaid": "^11.16.0",
+    "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@panticonic/builtin": "workspace:*"
+  }
+}
