@@ -1,13 +1,12 @@
 import type { RpcClient } from "@vibestudio/rpc";
+import type { PanelRendererViewReport } from "@vibestudio/service-schemas/panelRuntime";
 import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 export type PanelBootReportResult = "reported" | "stale";
 
-export interface PanelRendererViewObservation {
-  url: string;
-  loading: boolean;
-  boot: PanelBootObservation;
-}
+export type PanelRendererViewObservation = Omit<PanelRendererViewReport, "boot"> & {
+  boot: { kind: "observed"; observation: PanelBootObservation };
+};
 
 export interface PanelBootReporter {
   publish(boot: PanelBootObservation): void;
@@ -24,7 +23,9 @@ export function createPanelBootReporter(options: {
   rpc: Pick<RpcClient, "status" | "onStatusChange"> & {
     call(targetId: string, method: string, args: unknown[]): Promise<PanelBootReportResult>;
   };
-  observeView: (boot: PanelBootObservation) => PanelRendererViewObservation;
+  observeView: (
+    boot: PanelBootObservation
+  ) => Omit<PanelRendererViewObservation, "boot">;
   onError?: (error: unknown, observation: PanelRendererViewObservation) => void;
 }): PanelBootReporter {
   let generation = 0;
@@ -80,7 +81,13 @@ export function createPanelBootReporter(options: {
   return {
     publish(boot) {
       if (disposed || leaseEnded) return;
-      pending = { generation: ++generation, observation: options.observeView(boot) };
+      pending = {
+        generation: ++generation,
+        observation: {
+          ...options.observeView(boot),
+          boot: { kind: "observed", observation: boot },
+        },
+      };
       publishPending();
     },
     dispose() {

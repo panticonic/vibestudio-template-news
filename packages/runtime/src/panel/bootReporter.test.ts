@@ -6,7 +6,12 @@ import { createPanelBootReporter } from "./bootReporter.js";
 const observation = (boot: PanelBootObservation) => ({
   url: "http://panel.test/",
   loading: boot.phase !== "ready",
-  boot,
+  boot: { kind: "observed" as const, observation: boot },
+});
+
+const view = (boot: PanelBootObservation) => ({
+  url: "http://panel.test/",
+  loading: boot.phase !== "ready",
 });
 
 function deferred<T>() {
@@ -33,7 +38,7 @@ function harness() {
         return () => listeners.delete(listener);
       },
     },
-    observeView: observation,
+    observeView: view,
     onError,
   });
   return {

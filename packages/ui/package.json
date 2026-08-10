@@ -5,6 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./brand": "./src/brand.tsx",
+    "./icons": "./src/icons.ts",
     "./panel": "./src/panel.ts",
     "./tokens.css": "./src/tokens.css"
   },
@@ -13,6 +14,7 @@
     "@radix-ui/themes": "^3.2.1",
     "@vibestudio/shared": "workspace:*",
     "@workspace/runtime": "workspace:*",
+    "lucide-react": "^1.27.0",
     "shiki": "^3.23.0"
   },
   "peerDependencies": {

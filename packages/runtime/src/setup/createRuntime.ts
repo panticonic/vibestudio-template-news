@@ -49,7 +49,7 @@ export function createRuntime(deps: RuntimeDeps) {
     }),
     onError: (error, observation) => {
       console.warn("[panelRuntime] Failed to publish renderer boot evidence", {
-        phase: observation.boot.phase,
+        phase: observation.boot.observation.phase,
         error: error instanceof Error ? error.message : String(error),
       });
     },

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
-    "icon": "📰",
+    "icon": "./assets/icon.svg",
     "entry": "index.ts",
     "durable": {
       "classes": [
