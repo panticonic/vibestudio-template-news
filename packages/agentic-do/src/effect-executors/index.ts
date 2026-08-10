@@ -100,11 +100,14 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
         result: unknown;
         summary?: string;
         isError: boolean;
+        terminate?: boolean;
         terminalReasonCode?: string;
       };
       const turnControl = toolOutcome.isError
         ? undefined
-        : turnControlFromToolResult(toolOutcome.result);
+        : toolOutcome.terminate === true
+          ? ({ kind: "terminate" } as const)
+          : turnControlFromToolResult(toolOutcome.result);
       return {
         kind: "tool",
         ...toolOutcome,

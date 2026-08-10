@@ -420,14 +420,21 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
               kind: "tool-result",
               seq: envelope.seq,
               invocationId,
+              ...(pending.attemptId ? { attemptId: pending.attemptId } : {}),
               name: pending.name,
               result: payload["result"],
               isError: false,
+              ...(payload["turnControl"] &&
+              typeof payload["turnControl"] === "object" &&
+              (payload["turnControl"] as Record<string, unknown>)["kind"] === "terminate"
+                ? { terminate: true }
+                : {}),
             }
           : {
               kind: "tool-result",
               seq: envelope.seq,
               invocationId,
+              ...(pending.attemptId ? { attemptId: pending.attemptId } : {}),
               name: pending.name,
               result:
                 kind === "invocation.abandoned"
@@ -537,10 +544,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           },
         };
       }
-      if (
-        detailKind === "prompt.artifacts_ready" ||
-        detailKind === "prompt.artifacts_failed"
-      ) {
+      if (detailKind === "prompt.artifacts_ready" || detailKind === "prompt.artifacts_failed") {
         const triggerEnvelopeId = String(
           payload["triggerEnvelopeId"] ?? details["triggerEnvelopeId"] ?? ""
         );
@@ -552,9 +556,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
             ...state,
             pendingPromptPreparations,
             pendingPrompt:
-              state.pendingPrompt?.envelopeId === triggerEnvelopeId
-                ? null
-                : state.pendingPrompt,
+              state.pendingPrompt?.envelopeId === triggerEnvelopeId ? null : state.pendingPrompt,
             steeringQueue: state.steeringQueue.filter(
               (entry) => entry.envelopeId !== triggerEnvelopeId
             ),
@@ -576,14 +578,10 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
               ? { ...state.pendingPrompt, artifactsReady: true }
               : state.pendingPrompt,
           steeringQueue: state.steeringQueue.map((entry) =>
-            entry.envelopeId === triggerEnvelopeId
-              ? { ...entry, artifactsReady: true }
-              : entry
+            entry.envelopeId === triggerEnvelopeId ? { ...entry, artifactsReady: true } : entry
           ),
           deferredPostTurnQueue: state.deferredPostTurnQueue.map((entry) =>
-            entry.envelopeId === triggerEnvelopeId
-              ? { ...entry, artifactsReady: true }
-              : entry
+            entry.envelopeId === triggerEnvelopeId ? { ...entry, artifactsReady: true } : entry
           ),
         };
       }

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "📰",
     "entry": "index.ts",
     "durable": {
       "classes": [
@@ -15,7 +16,6 @@
     "agent": {
       "displayName": "News Agent",
       "description": "Aggregates feeds and followed topics into briefings",
-      "icon": "📰",
       "defaultConfig": {
         "handle": "news",
         "respondPolicy": "mentioned-or-followup"

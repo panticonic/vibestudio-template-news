@@ -806,7 +806,7 @@ describe("modelCallExecutor", () => {
     });
   });
 
-  it("appends immediate prompts after transcript messages without changing the system prompt", async () => {
+  it("keeps runtime-owned immediate instructions out of the user conversation", async () => {
     mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
     const inputDescriptor = descriptor();
     inputDescriptor.request.contextThroughSeq = 1;
@@ -848,19 +848,9 @@ describe("modelCallExecutor", () => {
     ).resolves.toMatchObject({ kind: "model", stopReason: "completed" });
 
     expect(streamedContext).toMatchObject({
-      systemPrompt: "BASE SYSTEM",
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Original request" }] },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "## Subagent Operating Contract\nOnly `complete` ends this subagent run.",
-            },
-          ],
-        },
-      ],
+      systemPrompt:
+        "BASE SYSTEM\n\n## Subagent Operating Contract\nOnly `complete` ends this subagent run.",
+      messages: [{ role: "user", content: [{ type: "text", text: "Original request" }] }],
     });
   });
 

@@ -368,6 +368,7 @@ export interface WorkspaceNode {
     type: "app";
     title: string;
     description?: string;
+    icon?: string;
     hidden?: boolean;
   };
   /**

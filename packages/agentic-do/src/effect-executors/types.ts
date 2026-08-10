@@ -131,6 +131,9 @@ export interface LocalToolPort {
         result: unknown;
         summary?: string;
         isError: boolean;
+        /** Preserve the tool runtime's early-termination request across the
+         * durable effect boundary. */
+        terminate?: boolean;
         terminalReasonCode?: string;
         failure?: AgentToolFailure;
       }

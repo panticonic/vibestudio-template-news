@@ -346,30 +346,9 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
       }),
       createSuspendTurnTool({
-        guard: ({ reason }) => {
+        guard: async ({ reason }) => {
           if (reason !== "waiting_for_background") return { suspend: true };
-          const supervised = this.subagentRuns
-            .listAll()
-            .filter((run) => run.parentChannelId === channelId);
-          const live = supervised.filter(
-            (run) => run.status === "starting" || run.status === "running"
-          );
-          if (live.length > 0) return { suspend: true };
-          const completedRunsAwaitingIntegration = supervised
-            .filter((run) => {
-              const integration = run.semanticIntegrationSnapshot;
-              return integration?.["state"] !== "complete";
-            })
-            .map((run) => subagentRunHandle(run.runId));
-          return {
-            suspend: false,
-            reason: "no_live_supervised_runs",
-            message:
-              completedRunsAwaitingIntegration.length > 0
-                ? `Turn not suspended: no supervised subagent is live. Review the retained result(s) ${completedRunsAwaitingIntegration.join(", ")} and continue the user goal; integrate only when the goal calls for incorporating the child work.`
-                : "Turn not suspended: no supervised subagent is live. Continue or finish the foreground request.",
-            details: { completedRunsAwaitingIntegration },
-          };
+          return this.guardBackgroundSuspension(channelId);
         },
       }),
       ...(hasAskableUser(this.rosterSnapshot(channelId)) ? [this.createAskUserTool()] : []),

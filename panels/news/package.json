@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "News",
+    "icon": "📰",
     "entry": "index.tsx",
     "exposeModules": [
       "react",

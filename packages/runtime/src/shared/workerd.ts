@@ -45,6 +45,7 @@ export interface WorkerSourceInfo {
   name: string;
   source: string;
   title?: string;
+  icon?: string;
   /** Manifest entry point relative to `source`; do not guess `index.ts`. */
   entry?: string;
   /** Durable Object classes declared by this source; empty for a regular worker. */
@@ -52,7 +53,6 @@ export interface WorkerSourceInfo {
   agent?: {
     displayName?: string;
     description?: string;
-    icon?: string;
     defaultConfig?: unknown;
   };
 }

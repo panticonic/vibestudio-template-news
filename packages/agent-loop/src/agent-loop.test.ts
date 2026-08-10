@@ -660,6 +660,65 @@ describe("agent-loop core lifecycle", () => {
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg1)]);
   });
 
+  it("closes a turn when the finalized tool batch requests termination", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "complete-1",
+          name: "complete",
+          arguments: { report: "done" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("complete-1"), {
+      kind: "tool",
+      result: { ok: true },
+      isError: false,
+      turnControl: { kind: "terminate" },
+    });
+
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+    expect(s.log.find((row) => row.payloadKind === "turn.closed")?.payload).toMatchObject({
+      reason: "tool_terminated",
+    });
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
+  });
+
+  it("continues after a mixed tool batch where only one result requests termination", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "complete-1", name: "complete", arguments: {} },
+        { type: "toolCall", id: "other-1", name: "other", arguments: {} },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("complete-1"), {
+      kind: "tool",
+      result: { ok: true },
+      isError: false,
+      turnControl: { kind: "terminate" },
+    });
+    resolveEffect(s, ids.invocationEffect("other-1"), {
+      kind: "tool",
+      result: { ok: true },
+      isError: false,
+    });
+
+    expect(s.state.openTurn).not.toBeNull();
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+  });
+
   it("does not let a recovery wake resume a turn from its own suspension result", () => {
     const s = scenario();
     prompt(s);
@@ -2362,6 +2421,62 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
   });
 
+  it("releases an after-turn message that arrives before suspension settles", () => {
+    const s = scenario();
+    promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "suspend-1",
+          name: "suspend_turn",
+          arguments: { reason: "waiting_for_background" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    promptWith(s, {
+      envelopeId: "env-terminal",
+      sourceMessageId: "subagent-terminal:run-1",
+      content: "Subagent run-1 completed.",
+      metadata: { deliverAfterTurn: true },
+    });
+    expect(s.state.deferredPostTurnQueue.map((entry) => entry.sourceMessageId)).toEqual([
+      "subagent-terminal:run-1",
+    ]);
+
+    resolveEffect(s, ids.invocationEffect("suspend-1"), {
+      kind: "tool",
+      result: {
+        protocolContent: [{ type: "text", text: "Turn suspended." }],
+        details: { suspendTurn: true, reason: "waiting_for_background" },
+      },
+      turnControl: {
+        kind: "suspend",
+        reason: "waiting_for_background",
+        summary: "Suspended until background work or user input arrives",
+      },
+      isError: false,
+    });
+
+    expect(s.state.deferredPostTurnQueue).toHaveLength(0);
+    expect(s.state.openTurn?.turnId).toBe(turn1);
+    expect(s.state.openTurn?.waitingAtSeq).toBeUndefined();
+    expect(
+      s.state.entries.some(
+        (entry) => entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-1"
+      )
+    ).toBe(true);
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+    expect(
+      s.outputs
+        .flatMap((output) => output.append)
+        .some((item) => item.payloadKind === "turn.closed")
+    ).toBe(false);
+  });
+
   it("does not lose a sibling terminal when user steering races the first terminal wake", () => {
     const s = scenario();
     promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });
@@ -2443,8 +2558,7 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
     expect(s.state.deferredPostTurnQueue).toHaveLength(0);
     expect(
       s.state.entries.some(
-        (entry) =>
-          entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-2"
+        (entry) => entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-2"
       )
     ).toBe(true);
     expect(readAcks(s).map((ack) => ack.messageId)).toEqual(

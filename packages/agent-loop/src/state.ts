@@ -142,6 +142,10 @@ export interface AgentTurnMetadata {
    *  deferred post-turn queue and promoted (one per turn) after close, instead
    *  of steering the open turn. */
   deliverAfterTurn?: boolean;
+  /** Exact retained child run whose terminal report this deferred prompt
+   * carries. Runtime-owned: it lets a same-turn suspend release the report
+   * without treating every completed-but-unintegrated child as pending input. */
+  supervisedTerminalRunId?: string;
   /**
    * A machine-stable user-interface selection carried by the same message as
    * its readable text. The context builder exposes this bounded structure to
@@ -380,9 +384,13 @@ export type SessionEntry =
       kind: "tool-result";
       seq: number;
       invocationId: string;
+      attemptId?: string;
       name: string;
       result: unknown;
       isError: boolean;
+      /** True only when this finalized tool asked the owning model turn to
+       * stop after its entire sibling batch settles. */
+      terminate?: boolean;
       /** Retained so a terminal infrastructure failure cannot be forgotten
        * while parallel sibling invocations are still settling. */
       terminalOutcome?: "tool_error" | "infrastructure_error";

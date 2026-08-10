@@ -1626,6 +1626,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             return {
               result: { protocolContent: result.content, details: result.details },
               isError: false,
+              ...(result.terminate === true ? { terminate: true } : {}),
             };
           } catch (err) {
             const failure = agentToolFailureFromUnknown(err, {
@@ -3253,8 +3254,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (typeof details["sourceEventId"] === "string") {
       this.subagentRuns.setSourceEventId(runId, details["sourceEventId"]);
     }
-    this.subagentRuns.setStatus(runId, terminalStatus);
-    this.subagentRuns.touch(runId, event.ts);
 
     const report =
       typeof payload["summary"] === "string"
@@ -3267,12 +3266,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       .filter((candidate) => candidate.parentChannelId === run.parentChannelId)
       .map(
         (candidate) =>
-          `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${candidate.status}`
+          `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${candidate.runId === runId ? terminalStatus : candidate.status}`
       )
       .join("\n");
     const liveCount = this.subagentRuns
       .listLive()
-      .filter((candidate) => candidate.parentChannelId === run.parentChannelId).length;
+      .filter(
+        (candidate) =>
+          candidate.parentChannelId === run.parentChannelId && candidate.runId !== runId
+      ).length;
     const content = [
       `Subagent \"${run.label || subagentRunHandle(runId)}\" ${terminalStatus}.`,
       report ? `Report:\n${report}` : "",
@@ -3293,9 +3295,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         sourceMessageId: event.messageId,
         content,
         senderRef: participantRefFromActor(agentic.actor),
-        metadata: { deliverAfterTurn: true },
+        metadata: { deliverAfterTurn: true, supervisedTerminalRunId: runId },
       },
     });
+    // The supervisor must remain observably live until its exact terminal
+    // report is durably admitted to the reasoning loop. Otherwise a
+    // concurrent suspend_turn can see no live children before the report is
+    // available, reject the suspension, and send the model chasing an empty
+    // retained transcript. A delivery retry re-enters this same transition;
+    // only successful admission advances the retained run to terminal.
+    this.subagentRuns.setStatus(runId, terminalStatus);
+    this.subagentRuns.touch(runId, event.ts);
     return true;
   }
 
@@ -5533,6 +5543,42 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this.subagentIdentity() !== null;
   }
 
+  /** Validate a model's request to wait for supervised work against both
+   * retained child lifecycle and already-admitted terminal prompts. A child
+   * may finish while the parent's spawning turn is still open; in that case
+   * the report is durably deferred until the turn closes and suspension is
+   * precisely what releases it. */
+  protected async guardBackgroundSuspension(channelId: string) {
+    const supervised = this.subagentRuns
+      .listAll()
+      .filter((run) => run.parentChannelId === channelId);
+    const live = supervised.filter((run) => run.status === "starting" || run.status === "running");
+    if (live.length > 0) return { suspend: true };
+
+    const terminalRunIds = new Set(supervised.map((run) => run.runId));
+    if (terminalRunIds.size > 0) {
+      const loop = await this.driver.loop(channelId);
+      const admittedTerminalReport = loop.state.deferredPostTurnQueue.some((prompt) => {
+        const runId = prompt.metadata?.supervisedTerminalRunId;
+        return typeof runId === "string" && terminalRunIds.has(runId);
+      });
+      if (admittedTerminalReport) return { suspend: true };
+    }
+
+    const completedRunsAwaitingIntegration = supervised
+      .filter((run) => run.semanticIntegrationSnapshot?.["state"] !== "complete")
+      .map((run) => subagentRunHandle(run.runId));
+    return {
+      suspend: false,
+      reason: "no_live_supervised_runs",
+      message:
+        completedRunsAwaitingIntegration.length > 0
+          ? `Turn not suspended: no supervised subagent is live and no terminal report is waiting to enter this conversation. Review the retained result(s) ${completedRunsAwaitingIntegration.join(", ")} and continue the user goal; integrate only when the goal calls for incorporating the child work.`
+          : "Turn not suspended: no supervised subagent is live. Continue or finish the foreground request.",
+      details: { completedRunsAwaitingIntegration },
+    };
+  }
+
   /** True once this run's terminal intent + execution fence committed (§7.2
    *  step 1). The wake row is the durable fact; it is retained after the
    *  notification settles, so the fence survives restart and hibernation. */
@@ -6857,10 +6903,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       report,
       outcome === "failed" ? "failed" : "completed"
     );
-    return this.toolText("subagent run completed; terminal delivery is durable", {
-      runId: sub.runId,
-      outcome,
-    });
+    return {
+      ...this.toolText("subagent run completed; terminal delivery is durable", {
+        runId: sub.runId,
+        outcome,
+      }),
+      // `complete` is the semantic end of this child, not an ordinary tool
+      // result for the model to reason over. The Pi loop otherwise starts a
+      // continuation after receiving the successful result, causing the child
+      // to call `complete` repeatedly while its first durable terminal intent
+      // waits to reach the parent.
+      terminate: true,
+    };
   }
 
   private async recordOwnSubagentTerminalIntent(

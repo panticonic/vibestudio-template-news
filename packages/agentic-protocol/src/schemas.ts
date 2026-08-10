@@ -271,7 +271,6 @@ const taskStartedPayloadSchema = z
   })
   .strict();
 
-
 const taskCompletedPayloadSchema = z
   .object({
     protocol: protocolSchema,
@@ -329,12 +328,16 @@ const invocationCompletedPayloadSchema = z
     terminalOutcome: z.literal("success"),
     terminalReasonCode: z.string().optional(),
     turnControl: z
-      .object({
-        kind: z.literal("suspend"),
-        reason: z.string(),
-        summary: z.string(),
-      })
-      .strict()
+      .union([
+        z
+          .object({
+            kind: z.literal("suspend"),
+            reason: z.string(),
+            summary: z.string(),
+          })
+          .strict(),
+        z.object({ kind: z.literal("terminate") }).strict(),
+      ])
       .optional(),
   })
   .strict();

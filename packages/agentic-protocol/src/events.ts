@@ -357,11 +357,15 @@ export type InvocationCompletedPayload = {
    * `result` is always blob-backed and therefore must never carry fields that
    * the trajectory fold needs in order to decide what happens next.
    */
-  turnControl?: {
-    kind: "suspend";
-    reason: string;
-    summary: string;
-  };
+  turnControl?:
+    | {
+        kind: "suspend";
+        reason: string;
+        summary: string;
+      }
+    | {
+        kind: "terminate";
+      };
 };
 
 export type InvocationTerminalFailureOutcome = Exclude<InvocationOutcome, "success">;
@@ -762,45 +766,45 @@ export type PayloadFor<K extends EventKind> = K extends "message.received" | "me
           ? InvocationPayloadFor<K>
           : K extends `task.${string}`
             ? TaskPayload
-          : K extends `approval.${string}`
-            ? ApprovalPayload
-            : K extends "ui.feedback"
-              ? UiFeedbackPayload
-              : K extends `ui.${string}`
-                ? UiPayload
-                : K extends "messageType.registered"
-                  ? MessageTypeRegisteredPayload
-                  : K extends "messageType.cleared"
-                    ? MessageTypeClearedPayload
-                    : K extends "custom.started"
-                      ? CustomStartedPayload
-                      : K extends "custom.updated"
-                        ? CustomUpdatedPayload
-                        : K extends "external.envelope_published"
-                          ? ExternalEnvelopePublishedPayload
-                          : K extends "external.envelope_observed"
-                            ? ExternalEnvelopeObservedPayload
-                            : K extends "external.participant_observed"
-                              ? ExternalParticipantObservedPayload
-                              : K extends `branch.${string}`
-                                ? BranchPayload
-                                : K extends `turn.${string}`
-                                  ? TurnPayload
-                                  : K extends "system.compaction_recorded"
-                                    ? CompactionPayload
-                                    : K extends "system.event"
-                                      ? SystemPayload
-                                      : K extends "memory.recalled"
-                                        ? MemoryRecalledPayload
-                                        : K extends "build.completed"
-                                          ? BuildCompletedPayload
-                                          : K extends "channel.forked"
-                                            ? ChannelForkedPayload
-                                            : K extends "channel.fork_renamed"
-                                              ? ChannelForkRenamedPayload
-                                              : K extends "channel.fork_archived"
-                                                ? ChannelForkArchivedPayload
-                                                : never;
+            : K extends `approval.${string}`
+              ? ApprovalPayload
+              : K extends "ui.feedback"
+                ? UiFeedbackPayload
+                : K extends `ui.${string}`
+                  ? UiPayload
+                  : K extends "messageType.registered"
+                    ? MessageTypeRegisteredPayload
+                    : K extends "messageType.cleared"
+                      ? MessageTypeClearedPayload
+                      : K extends "custom.started"
+                        ? CustomStartedPayload
+                        : K extends "custom.updated"
+                          ? CustomUpdatedPayload
+                          : K extends "external.envelope_published"
+                            ? ExternalEnvelopePublishedPayload
+                            : K extends "external.envelope_observed"
+                              ? ExternalEnvelopeObservedPayload
+                              : K extends "external.participant_observed"
+                                ? ExternalParticipantObservedPayload
+                                : K extends `branch.${string}`
+                                  ? BranchPayload
+                                  : K extends `turn.${string}`
+                                    ? TurnPayload
+                                    : K extends "system.compaction_recorded"
+                                      ? CompactionPayload
+                                      : K extends "system.event"
+                                        ? SystemPayload
+                                        : K extends "memory.recalled"
+                                          ? MemoryRecalledPayload
+                                          : K extends "build.completed"
+                                            ? BuildCompletedPayload
+                                            : K extends "channel.forked"
+                                              ? ChannelForkedPayload
+                                              : K extends "channel.fork_renamed"
+                                                ? ChannelForkRenamedPayload
+                                                : K extends "channel.fork_archived"
+                                                  ? ChannelForkArchivedPayload
+                                                  : never;
 
 export interface AgenticEvent<K extends EventKind = EventKind> {
   kind: K;

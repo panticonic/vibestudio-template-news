@@ -819,6 +819,21 @@ function suspendTurnFromInvocationPayload(
   };
 }
 
+/** Match the tool runtime's batch termination contract after durable folding:
+ * early termination is valid only when every finalized tool result from this
+ * model attempt requested it. Mixed batches continue through the model. */
+function completedToolBatchTerminates(state: AgentState, invocationId: string): boolean {
+  const current = [...state.entries]
+    .reverse()
+    .find((entry) => entry.kind === "tool-result" && entry.invocationId === invocationId);
+  if (current?.kind !== "tool-result" || !current.attemptId) return false;
+  const batch = state.entries.filter(
+    (entry): entry is Extract<SessionEntry, { kind: "tool-result" }> =>
+      entry.kind === "tool-result" && entry.attemptId === current.attemptId
+  );
+  return batch.length > 0 && batch.every((entry) => entry.terminate === true);
+}
+
 function hasFreshInput(state: AgentState): boolean {
   if (state.steeringQueue.length > 0) return true;
   // A parked turn resumes only for transcript input appended after its
@@ -1556,6 +1571,25 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     if (kind === "invocation.completed") {
       const suspension = suspendTurnFromInvocationPayload(payload);
       if (suspension) {
+        // A send-after-turn prompt may have arrived while the model was
+        // deciding to suspend. Treat the oldest ready deferred prompt exactly
+        // like input delivered to an already parked turn: promote it into the
+        // current turn and continue the model. Closing here would make a
+        // response waiter observe a response-less terminal turn before the
+        // promoted input could be synthesized.
+        const deferred = state.deferredPostTurnQueue[0];
+        if (
+          deferred?.artifactsReady &&
+          Object.keys(state.pendingPromptPreparations).length === 0
+        ) {
+          const recv = promotedRecvItem(deferred, state.lastSeq);
+          const afterRecv = projectAppend(state, [recv], ctx.now);
+          const next = nextModelCall(afterRecv, 1, ctx, [deferred.sourceMessageId]);
+          return {
+            append: [recv, ...next.append],
+            effects: next.effects,
+          };
+        }
         return {
           append: [
             turnWaitingItem(turn.turnId, turn.waitingCount, {
@@ -1563,6 +1597,12 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
               summary: suspension.summary,
             }),
           ],
+          effects: [],
+        };
+      }
+      if (completedToolBatchTerminates(state, String(causality["invocationId"] ?? ""))) {
+        return {
+          append: [turnClosedItem(turn.turnId, { reason: "tool_terminated" })],
           effects: [],
         };
       }

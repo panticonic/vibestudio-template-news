@@ -368,11 +368,15 @@ export type EffectOutcome =
       terminalOutcome?: "tool_error" | "infrastructure_error";
       /** Stable typed reason preserved from the tool/service boundary. */
       terminalReasonCode?: string;
-      turnControl?: {
-        kind: "suspend";
-        reason: string;
-        summary: string;
-      };
+      turnControl?:
+        | {
+            kind: "suspend";
+            reason: string;
+            summary: string;
+          }
+        | {
+            kind: "terminate";
+          };
       /** Canonical failure envelope preserved unchanged into the terminal
        * invocation event. */
       failure?: AgentToolFailure;
