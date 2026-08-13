@@ -7,7 +7,14 @@
  * for a request that is still loading or has failed.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Badge,
   Box,
@@ -45,12 +52,20 @@ import {
   type DurableObjectServiceClient,
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
-import { useAppTheme } from "@workspace/ui/panel";
-import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
+import {
+  useHostCommands,
+  usePanelTheme,
+  usePanelThemeConfig,
+  useStateArgs,
+} from "@workspace/react";
+import {
+  AgenticChat,
+  ErrorBoundary,
+  FULL_AGENTIC_CHAT_FEATURES,
+} from "@workspace/agentic-chat";
 import type { ConnectionConfig } from "@workspace/agentic-chat";
 import {
-  createPanelSandboxConfig,
+  createPanelImportLoader,
   launchAgentIntoChannel,
   parseSignalEvent,
   unwrapChatMethodResult,
@@ -94,7 +109,7 @@ import {
   type ArticleRow,
   type BriefingRow,
 } from "./components.js";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
 import "./style.css";
 
 type ReaderTab = "inbox" | "saved" | "briefings";
@@ -137,7 +152,11 @@ interface DeepDiveStory {
   source?: string;
 }
 
-const EMPTY_PAGE: ArticlePage = { status: "idle", articles: [], hasMore: false };
+const EMPTY_PAGE: ArticlePage = {
+  status: "idle",
+  articles: [],
+  hasMore: false,
+};
 const EMPTY_SEARCH: SearchState = {
   status: "idle",
   query: "",
@@ -163,7 +182,7 @@ function settle(promise: Promise<unknown>): void {
 
 function modelHasMatchingCredential(
   baseUrl: string | undefined,
-  audiences: UrlAudience[]
+  audiences: UrlAudience[],
 ): boolean {
   if (!baseUrl?.trim() || /\{[^}]+\}/.test(baseUrl)) return false;
   try {
@@ -175,7 +194,7 @@ function modelHasMatchingCredential(
 
 async function detectMissingModelCredential(
   catalog: ModelCatalog,
-  modelRef: string
+  modelRef: string,
 ): Promise<{ providerId: string; baseUrl: string } | null> {
   const entry = catalog.models.find((model) => model.ref === modelRef);
   if (!entry?.connectable) return null;
@@ -183,9 +202,11 @@ async function detectMissingModelCredential(
     const credentials = await rpc.call<Array<{ audience: UrlAudience[] }>>(
       "main",
       "credentials.listStoredCredentials",
-      []
+      [],
     );
-    const audiences = credentials.flatMap((credential) => credential.audience ?? []);
+    const audiences = credentials.flatMap(
+      (credential) => credential.audience ?? [],
+    );
     return modelHasMatchingCredential(entry.baseUrl, audiences)
       ? null
       : { providerId: entry.provider, baseUrl: entry.baseUrl };
@@ -209,7 +230,8 @@ async function ensureAgentSubscribed(input: {
     config: { handle: NEWS_AGENT_HANDLE, ...(input.config ?? {}) },
     replay: true,
   });
-  if (!subscription.participantId) throw new Error("News agent did not join the reader");
+  if (!subscription.participantId)
+    throw new Error("News agent did not join the reader");
   return subscription.participantId;
 }
 
@@ -217,7 +239,7 @@ async function callParticipant(
   client: PubSubClient,
   participantId: string,
   method: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): Promise<unknown> {
   await client.ready();
   const result = await client.callMethod(participantId, method, args).result;
@@ -238,13 +260,14 @@ function statusCopy(overview: Overview | null, loading: boolean): string {
 
 export default function NewsPanel() {
   const theme = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const stateArgs = useStateArgs<NewsStateArgs>();
   const contextId = requireNewsContextId(runtimeContextId);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
   const [participantId, setParticipantId] = useState<string | null>(null);
-  const [bootstrapStatus, setBootstrapStatus] = useState<RequestStatus>("loading");
+  const [bootstrapStatus, setBootstrapStatus] =
+    useState<RequestStatus>("loading");
   const [bootstrapNonce, setBootstrapNonce] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [briefings, setBriefings] = useState<BriefingRow[]>([]);
@@ -261,23 +284,27 @@ export default function NewsPanel() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [triageError, setTriageError] = useState<string | null>(null);
-  const [modelConnect, setModelConnect] = useState<{ providerId: string; baseUrl: string } | null>(
-    null
-  );
+  const [modelConnect, setModelConnect] = useState<{
+    providerId: string;
+    baseUrl: string;
+  } | null>(null);
   const [connectingModel, setConnectingModel] = useState(false);
 
   const channelName = stateArgs.channelName ?? bootstrapChannel;
   const clientRef = useRef<PubSubClient | null>(null);
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
-  const deepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(async () => undefined);
-  const lastPubsubId = useRef(0);
+  const deepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(
+    async () => undefined,
+  );
   const bootstrapAttempted = useRef(false);
   const triageRequested = useRef(false);
   const previousVisit = useRef(
-    typeof stateArgs.lastVisitAt === "number" ? stateArgs.lastVisitAt : 0
+    typeof stateArgs.lastVisitAt === "number" ? stateArgs.lastVisitAt : 0,
   );
   const modelService = useRef<DurableObjectServiceClient | null>(null);
-  const modelProbe = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(null);
+  const modelProbe = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     void panel.stateArgs.set({ lastVisitAt: Date.now() });
@@ -297,10 +324,15 @@ export default function NewsPanel() {
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
 
-        modelService.current ??= createDurableObjectServiceClient(MODEL_SETTINGS_SERVICE_PROTOCOL);
+        modelService.current ??= createDurableObjectServiceClient(
+          MODEL_SETTINGS_SERVICE_PROTOCOL,
+        );
         let settings: ModelSettingsSnapshot | null = null;
         try {
-          settings = await modelService.current.call<ModelSettingsSnapshot>("getSettings");
+          settings =
+            await modelService.current.call<ModelSettingsSnapshot>(
+              "getSettings",
+            );
         } catch (error) {
           console.warn("[News] Could not read model settings", error);
         }
@@ -318,14 +350,25 @@ export default function NewsPanel() {
         setBootstrapStatus("ready");
         if (settings?.catalog) {
           modelProbe.current = { catalog: settings.catalog, modelRef: model };
-          setModelConnect(await detectMissingModelCredential(settings.catalog, model));
+          setModelConnect(
+            await detectMissingModelCredential(settings.catalog, model),
+          );
         }
       } catch (error) {
         setBootstrapStatus("error");
-        setNotice({ tone: "red", text: `News could not start: ${errorMessage(error)}` });
+        setNotice({
+          tone: "red",
+          text: `News could not start: ${errorMessage(error)}`,
+        });
       }
     })();
-  }, [bootstrapNonce, contextId, stateArgs.agentConfig, stateArgs.agentKey, stateArgs.channelName]);
+  }, [
+    bootstrapNonce,
+    contextId,
+    stateArgs.agentConfig,
+    stateArgs.agentKey,
+    stateArgs.channelName,
+  ]);
 
   const retryBootstrap = useCallback(() => {
     bootstrapAttempted.current = false;
@@ -336,21 +379,25 @@ export default function NewsPanel() {
   const callAgent = useCallback(
     async (method: string, args: Record<string, unknown>) => {
       const client = clientRef.current;
-      if (!client || !participantId) throw new Error("News is still connecting");
+      if (!client || !participantId)
+        throw new Error("News is still connecting");
       return callParticipant(client, participantId, method, args);
     },
-    [participantId]
+    [participantId],
   );
 
   const refresh = useCallback(async () => {
     if (!participantId || !channelName) return;
     setInbox((current) =>
-      current.status === "idle" ? { ...current, status: "loading" } : current
+      current.status === "idle" ? { ...current, status: "loading" } : current,
     );
     try {
       const [nextOverview, articleResult, historyResult] = await Promise.all([
         callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
-        callAgent(NEWS_METHODS.listArticles, { limit: 40, triagedOnly: true }) as Promise<{
+        callAgent(NEWS_METHODS.listArticles, {
+          limit: 40,
+          triagedOnly: true,
+        }) as Promise<{
           articles: ArticleRow[];
           hasMore?: boolean;
           nextCursor?: string;
@@ -370,13 +417,18 @@ export default function NewsPanel() {
     } catch (error) {
       const message = errorMessage(error);
       setInbox((current) => ({ ...current, status: "error", error: message }));
-      setNotice({ tone: "red", text: `Could not update the reader: ${message}` });
+      setNotice({
+        tone: "red",
+        text: `Could not update the reader: ${message}`,
+      });
     }
 
     const probe = modelProbe.current;
     if (probe) {
       try {
-        setModelConnect(await detectMissingModelCredential(probe.catalog, probe.modelRef));
+        setModelConnect(
+          await detectMissingModelCredential(probe.catalog, probe.modelRef),
+        );
       } catch {
         /* keep the last known state */
       }
@@ -417,15 +469,17 @@ export default function NewsPanel() {
     void (async () => {
       try {
         await client.ready();
-        for await (const event of client.events({ includeReplay: true, includeSignals: true })) {
+        for await (const event of client.events({
+          includeReplay: true,
+          includeSignals: true,
+        })) {
           if (cancelled) break;
           if (typeof event.pubsubId === "number") {
-            lastPubsubId.current = Math.max(lastPubsubId.current, event.pubsubId);
           }
           if (event.type === "signal") {
             const payload = parseSignalEvent<NewsDeepDiveRequested>(
               event as { content: string; contentType?: string },
-              NEWS_DEEPDIVE_SIGNAL
+              NEWS_DEEPDIVE_SIGNAL,
             );
             if (payload) {
               void deepDiveRef.current(payload);
@@ -436,7 +490,10 @@ export default function NewsPanel() {
         }
       } catch (error) {
         if (!cancelled)
-          setNotice({ tone: "red", text: `Live updates paused: ${errorMessage(error)}` });
+          setNotice({
+            tone: "red",
+            text: `Live updates paused: ${errorMessage(error)}`,
+          });
       }
     })();
     return () => {
@@ -463,7 +520,7 @@ export default function NewsPanel() {
         setActiveAction(null);
       }
     },
-    [callAgent, refresh]
+    [callAgent, refresh],
   );
 
   useEffect(() => {
@@ -486,7 +543,10 @@ export default function NewsPanel() {
     let cancelled = false;
     setSaved({ ...EMPTY_PAGE, status: "loading" });
     void (
-      callAgent(NEWS_METHODS.listArticles, { savedOnly: true, limit: 40 }) as Promise<{
+      callAgent(NEWS_METHODS.listArticles, {
+        savedOnly: true,
+        limit: 40,
+      }) as Promise<{
         articles: ArticleRow[];
         hasMore?: boolean;
         nextCursor?: string;
@@ -503,8 +563,13 @@ export default function NewsPanel() {
       },
       (error) => {
         if (!cancelled)
-          setSaved({ status: "error", articles: [], hasMore: false, error: errorMessage(error) });
-      }
+          setSaved({
+            status: "error",
+            articles: [],
+            hasMore: false,
+            error: errorMessage(error),
+          });
+      },
     );
     return () => {
       cancelled = true;
@@ -518,10 +583,18 @@ export default function NewsPanel() {
       return;
     }
     let cancelled = false;
-    setSearch({ status: "loading", query: normalized, articles: [], briefings: [] });
+    setSearch({
+      status: "loading",
+      query: normalized,
+      articles: [],
+      briefings: [],
+    });
     const timer = window.setTimeout(() => {
       void (
-        callAgent(NEWS_METHODS.searchArchive, { query: normalized, limit: 60 }) as Promise<{
+        callAgent(NEWS_METHODS.searchArchive, {
+          query: normalized,
+          limit: 60,
+        }) as Promise<{
           query: string;
           articles: ArticleRow[];
           briefings: BriefingRow[];
@@ -546,7 +619,7 @@ export default function NewsPanel() {
               briefings: [],
               error: errorMessage(error),
             });
-        }
+        },
       );
     }, 250);
     return () => {
@@ -555,24 +628,43 @@ export default function NewsPanel() {
     };
   }, [callAgent, participantId, query]);
 
-  const patchArticle = useCallback((articleId: string, patch: Partial<ArticleRow>) => {
-    const apply = (articles: ArticleRow[]) =>
-      articles.map((item) => (item.articleId === articleId ? { ...item, ...patch } : item));
-    setInbox((current) => ({ ...current, articles: apply(current.articles) }));
-    setSaved((current) => ({ ...current, articles: apply(current.articles) }));
-    setSearch((current) => ({ ...current, articles: apply(current.articles) }));
-  }, []);
+  const patchArticle = useCallback(
+    (articleId: string, patch: Partial<ArticleRow>) => {
+      const apply = (articles: ArticleRow[]) =>
+        articles.map((item) =>
+          item.articleId === articleId ? { ...item, ...patch } : item,
+        );
+      setInbox((current) => ({
+        ...current,
+        articles: apply(current.articles),
+      }));
+      setSaved((current) => ({
+        ...current,
+        articles: apply(current.articles),
+      }));
+      setSearch((current) => ({
+        ...current,
+        articles: apply(current.articles),
+      }));
+    },
+    [],
+  );
 
   const markRead = useCallback(
     (article: ArticleRow) => {
       if (article.read) return;
       patchArticle(article.articleId, { read: true });
-      void callAgent(NEWS_METHODS.markRead, { articleIds: [article.articleId] }).catch((error) => {
+      void callAgent(NEWS_METHODS.markRead, {
+        articleIds: [article.articleId],
+      }).catch((error) => {
         patchArticle(article.articleId, { read: false });
-        setNotice({ tone: "red", text: `Could not mark this story read: ${errorMessage(error)}` });
+        setNotice({
+          tone: "red",
+          text: `Could not mark this story read: ${errorMessage(error)}`,
+        });
       });
     },
-    [callAgent, patchArticle]
+    [callAgent, patchArticle],
   );
 
   const setSavedState = useCallback(
@@ -581,7 +673,9 @@ export default function NewsPanel() {
       if (!nextSaved)
         setSaved((current) => ({
           ...current,
-          articles: current.articles.filter((item) => item.articleId !== article.articleId),
+          articles: current.articles.filter(
+            (item) => item.articleId !== article.articleId,
+          ),
         }));
       void callAgent(NEWS_METHODS.setSaved, {
         articleId: article.articleId,
@@ -589,16 +683,22 @@ export default function NewsPanel() {
       }).catch((error) => {
         patchArticle(article.articleId, { saved: !nextSaved });
         void refresh();
-        setNotice({ tone: "red", text: `Could not update Saved: ${errorMessage(error)}` });
+        setNotice({
+          tone: "red",
+          text: `Could not update Saved: ${errorMessage(error)}`,
+        });
       });
     },
-    [callAgent, patchArticle, refresh]
+    [callAgent, patchArticle, refresh],
   );
 
   const react = useCallback(
     (article: ArticleRow, reaction: "more" | "less" | "mute_source") => {
       if (reaction !== "more") patchArticle(article.articleId, { read: true });
-      void callAgent(NEWS_METHODS.reactToStory, { articleId: article.articleId, reaction }).then(
+      void callAgent(NEWS_METHODS.reactToStory, {
+        articleId: article.articleId,
+        reaction,
+      }).then(
         (result) => {
           const muted =
             result && typeof result === "object"
@@ -618,12 +718,13 @@ export default function NewsPanel() {
           void refresh();
         },
         (error) => {
-          if (reaction !== "more") patchArticle(article.articleId, { read: article.read });
+          if (reaction !== "more")
+            patchArticle(article.articleId, { read: article.read });
           setNotice({ tone: "red", text: errorMessage(error) });
-        }
+        },
       );
     },
-    [callAgent, patchArticle, refresh]
+    [callAgent, patchArticle, refresh],
   );
 
   const deepDive = useCallback(
@@ -634,13 +735,14 @@ export default function NewsPanel() {
       try {
         const fork = await forkConversation(rpc, {
           channelId: channelName,
-          forkPointPubsubId: lastPubsubId.current,
+          locus: { kind: "head" },
           reason: "deep-dive",
         });
         const agent = fork.clonedAgents.find(
-          (candidate) => candidate.className === NEWS_AGENT_CLASS
+          (candidate) => candidate.className === NEWS_AGENT_CLASS,
         );
-        if (!agent) throw new Error("The News analyst was not present in the fork");
+        if (!agent)
+          throw new Error("The News analyst was not present in the fork");
         const forkClient = connectViaRpc({
           rpc,
           channel: fork.forkedChannelId,
@@ -661,10 +763,13 @@ export default function NewsPanel() {
               url: story.url,
               title: story.title,
               source: story.source,
-              briefingTldr: briefings.find((item) => item.status === "ready" && item.tldr)?.tldr,
-            }
+              briefingTldr: briefings.find(
+                (item) => item.status === "ready" && item.tldr,
+              )?.tldr,
+            },
           )) as { ok?: boolean; error?: string };
-          if (!started.ok) throw new Error(started.error ?? "The analyst could not start");
+          if (!started.ok)
+            throw new Error(started.error ?? "The analyst could not start");
         } finally {
           await forkClient.close();
         }
@@ -685,9 +790,11 @@ export default function NewsPanel() {
             ],
           },
         });
-        const article = [...inbox.articles, ...saved.articles, ...search.articles].find(
-          (item) => item.articleId === story.articleId
-        );
+        const article = [
+          ...inbox.articles,
+          ...saved.articles,
+          ...search.articles,
+        ].find((item) => item.articleId === story.articleId);
         if (article) markRead(article);
         setNotice(null);
       } catch (error) {
@@ -699,7 +806,14 @@ export default function NewsPanel() {
         setActiveAction(null);
       }
     },
-    [briefings, channelName, inbox.articles, markRead, saved.articles, search.articles]
+    [
+      briefings,
+      channelName,
+      inbox.articles,
+      markRead,
+      saved.articles,
+      search.articles,
+    ],
   );
   deepDiveRef.current = deepDive;
 
@@ -709,12 +823,20 @@ export default function NewsPanel() {
     try {
       const request = toPanelConnectRequest(modelConnect.providerId);
       if (!request)
-        throw new Error(`No connection flow is available for ${modelConnect.providerId}`);
+        throw new Error(
+          `No connection flow is available for ${modelConnect.providerId}`,
+        );
       await rpc.call("main", "credentials.connect", [request]);
       setModelConnect(null);
-      setNotice({ tone: "green", text: `${modelConnect.providerId} is connected.` });
+      setNotice({
+        tone: "green",
+        text: `${modelConnect.providerId} is connected.`,
+      });
     } catch (error) {
-      setNotice({ tone: "red", text: `Could not connect the model: ${errorMessage(error)}` });
+      setNotice({
+        tone: "red",
+        text: `Could not connect the model: ${errorMessage(error)}`,
+      });
     } finally {
       setConnectingModel(false);
     }
@@ -739,7 +861,10 @@ export default function NewsPanel() {
       if (tab === "saved") setSaved(update);
       else setInbox(update);
     } catch (error) {
-      setNotice({ tone: "red", text: `Could not load older stories: ${errorMessage(error)}` });
+      setNotice({
+        tone: "red",
+        text: `Could not load older stories: ${errorMessage(error)}`,
+      });
     } finally {
       setActiveAction(null);
     }
@@ -753,14 +878,21 @@ export default function NewsPanel() {
       : []
     : tab === "saved"
       ? saved.articles
-      : inbox.articles.filter((article) => inboxView === "all" || !article.read);
+      : inbox.articles.filter(
+          (article) => inboxView === "all" || !article.read,
+        );
   const visibleArticles = source
     ? baseArticles.filter((article) => article.source === source)
     : baseArticles;
   const sources = [
-    ...new Set([...inbox.articles, ...saved.articles].map((article) => article.source)),
+    ...new Set(
+      [...inbox.articles, ...saved.articles].map((article) => article.source),
+    ),
   ].sort();
-  const clusters = useMemo(() => clusterArticles(visibleArticles), [visibleArticles]);
+  const clusters = useMemo(
+    () => clusterArticles(visibleArticles),
+    [visibleArticles],
+  );
   const grouped = useMemo(() => {
     const result: Array<{
       cluster: ReturnType<typeof clusterArticles>[number];
@@ -775,29 +907,37 @@ export default function NewsPanel() {
       groups.set(category, items);
     }
     for (const [category, items] of groups)
-      items.forEach((cluster, index) => result.push({ cluster, category, starts: index === 0 }));
+      items.forEach((cluster, index) =>
+        result.push({ cluster, category, starts: index === 0 }),
+      );
     return result;
   }, [clusters]);
 
   useEffect(() => setSelectedIndex(0), [inboxView, query, source, tab]);
   useEffect(
-    () => setSelectedIndex((index) => Math.min(index, Math.max(0, grouped.length - 1))),
-    [grouped.length]
+    () =>
+      setSelectedIndex((index) =>
+        Math.min(index, Math.max(0, grouped.length - 1)),
+      ),
+    [grouped.length],
   );
 
   const handleReaderKeyDown = (event: React.KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
+      return;
     const target = event.target as HTMLElement;
     if (
       target.closest(
-        "input, textarea, select, button, a, [role='dialog'], [contenteditable='true']"
+        "input, textarea, select, button, a, [role='dialog'], [contenteditable='true']",
       )
     )
       return;
     const current = grouped[selectedIndex]?.cluster.primary;
     if (!current) return;
-    if (event.key === "j") setSelectedIndex((value) => Math.min(value + 1, grouped.length - 1));
-    else if (event.key === "k") setSelectedIndex((value) => Math.max(value - 1, 0));
+    if (event.key === "j")
+      setSelectedIndex((value) => Math.min(value + 1, grouped.length - 1));
+    else if (event.key === "k")
+      setSelectedIndex((value) => Math.max(value - 1, 0));
     else if (event.key === "o") {
       window.open(current.url, "_blank", "noopener");
       markRead(current);
@@ -808,10 +948,13 @@ export default function NewsPanel() {
     event.preventDefault();
   };
 
-  const latestReady = briefings.find((item) => item.status === "ready" && item.tldr);
+  const latestReady = briefings.find(
+    (item) => item.status === "ready" && item.tldr,
+  );
   const currentBriefing = briefings[0];
   const latestPending =
-    currentBriefing?.status === "collecting" || currentBriefing?.status === "summarizing"
+    currentBriefing?.status === "collecting" ||
+    currentBriefing?.status === "summarizing"
       ? currentBriefing
       : undefined;
   const heroBriefing =
@@ -819,33 +962,42 @@ export default function NewsPanel() {
       ? currentBriefing
       : latestReady;
   const hasSources = Boolean(
-    overview && (overview.setup.feeds.length > 0 || overview.setup.followedTopics.length > 0)
+    overview &&
+    (overview.setup.feeds.length > 0 ||
+      overview.setup.followedTopics.length > 0),
   );
   const modelProven = Boolean(latestReady || overview?.lastBriefingId);
   const showModelConnect = Boolean(modelConnect) && !modelProven;
 
   const config: ConnectionConfig = useMemo(
     () => ({ clientId: rpc.selfId, rpc, recoveryCoordinator }),
-    []
+    [],
   );
-  const sandbox = useMemo(() => createPanelSandboxConfig(rpc), []);
+  const importLoader = useMemo(
+    () =>
+      createPanelImportLoader(rpc, {
+        defaultWorkspaceRef: () => `ctx:${contextId}`,
+      }),
+    [contextId],
+  );
   const installedAgents = useMemo(
     () => [{ agentId: NEWS_AGENT_CLASS, handle: NEWS_AGENT_HANDLE }],
-    []
+    [],
   );
 
-  const paletteCommands = useMemo(
+  const hostCommands = useMemo(
     () => [
-      { id: "news-update", label: "Update sources", section: "News" },
-      { id: "news-brief", label: "Create briefing", section: "News" },
-      { id: "news-saved", label: "Open Saved", section: "News" },
-      { id: "news-assistant", label: "Open News assistant", section: "News" },
+      { id: "news-update", label: "Update sources", group: "News" },
+      { id: "news-brief", label: "Create briefing", group: "News" },
+      { id: "news-saved", label: "Open Saved", group: "News" },
+      { id: "news-assistant", label: "Open News assistant", group: "News" },
     ],
-    []
+    [],
   );
-  usePaletteCommands(paletteCommands, (id) => {
+  useHostCommands(hostCommands, (id) => {
     if (id === "news-update") settle(perform(NEWS_METHODS.refreshNow, {}));
-    else if (id === "news-brief") settle(perform(NEWS_METHODS.refreshNow, { briefing: true }));
+    else if (id === "news-brief")
+      settle(perform(NEWS_METHODS.refreshNow, { briefing: true }));
     else if (id === "news-saved") setTab("saved");
     else if (id === "news-assistant") setAssistantOpen(true);
   });
@@ -854,7 +1006,12 @@ export default function NewsPanel() {
     return (
       <ErrorBoundary>
         <Theme appearance={theme} {...appTheme}>
-          <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
+          <Flex
+            align="center"
+            justify="center"
+            gap="2"
+            style={{ height: "100dvh" }}
+          >
             <Spinner />
             <Text size="2" color="gray">
               Opening your reader…
@@ -877,14 +1034,21 @@ export default function NewsPanel() {
               tabIndex={-1}
             >
               <header className="news-header">
-                <Flex className="news-header-inner news-toolbar" align="center" gap="3" wrap="wrap">
+                <Flex
+                  className="news-header-inner news-toolbar"
+                  align="center"
+                  gap="3"
+                  wrap="wrap"
+                >
                   <Box className="news-brand-mark">
                     <SpeakerLoudIcon width="19" height="19" />
                   </Box>
                   <Box style={{ minWidth: 0 }}>
                     <Heading size="4">News</Heading>
                     <Flex align="center" gap="1">
-                      {(overview?.untriagedCount ?? 0) > 0 ? <Spinner size="1" /> : null}
+                      {(overview?.untriagedCount ?? 0) > 0 ? (
+                        <Spinner size="1" />
+                      ) : null}
                       <Text size="1" color="gray" truncate>
                         {statusCopy(overview, bootstrapStatus === "loading")}
                       </Text>
@@ -920,15 +1084,25 @@ export default function NewsPanel() {
                       size="2"
                       variant="soft"
                       disabled={Boolean(activeAction) || !participantId}
-                      onClick={() => settle(perform(NEWS_METHODS.refreshNow, {}))}
+                      onClick={() =>
+                        settle(perform(NEWS_METHODS.refreshNow, {}))
+                      }
                     >
-                      {activeAction === NEWS_METHODS.refreshNow ? <Spinner /> : <ReloadIcon />}
+                      {activeAction === NEWS_METHODS.refreshNow ? (
+                        <Spinner />
+                      ) : (
+                        <ReloadIcon />
+                      )}
                       <span className="news-action-label">Update</span>
                     </Button>
                     <Button
                       size="2"
                       disabled={Boolean(activeAction) || !participantId}
-                      onClick={() => settle(perform(NEWS_METHODS.refreshNow, { briefing: true }))}
+                      onClick={() =>
+                        settle(
+                          perform(NEWS_METHODS.refreshNow, { briefing: true }),
+                        )
+                      }
                     >
                       <LightningBoltIcon />
                       <span className="news-action-label">Brief me</span>
@@ -945,7 +1119,11 @@ export default function NewsPanel() {
                     <IconButton
                       size="2"
                       variant={assistantOpen ? "solid" : "soft"}
-                      aria-label={assistantOpen ? "Close News assistant" : "Open News assistant"}
+                      aria-label={
+                        assistantOpen
+                          ? "Close News assistant"
+                          : "Open News assistant"
+                      }
                       onClick={() => setAssistantOpen((value) => !value)}
                     >
                       <ChatBubbleIcon />
@@ -980,7 +1158,12 @@ export default function NewsPanel() {
                       </Callout.Root>
                     ) : null}
                     {bootstrapStatus === "error" ? (
-                      <Button size="1" variant="soft" color="red" onClick={retryBootstrap}>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        color="red"
+                        onClick={retryBootstrap}
+                      >
                         Retry startup
                       </Button>
                     ) : null}
@@ -992,8 +1175,8 @@ export default function NewsPanel() {
                         <Callout.Text>
                           <Flex align="center" gap="3" wrap="wrap">
                             <Text size="2">
-                              Connect {modelConnect.providerId} to create briefings and explore
-                              stories.
+                              Connect {modelConnect.providerId} to create
+                              briefings and explore stories.
                             </Text>
                             <Button
                               size="1"
@@ -1010,14 +1193,19 @@ export default function NewsPanel() {
                       <Callout.Root color="red" size="1">
                         <Callout.Text>
                           <Flex align="center" gap="2" wrap="wrap">
-                            <Text size="2">Organizing paused: {triageError}</Text>
+                            <Text size="2">
+                              Organizing paused: {triageError}
+                            </Text>
                             <Button
                               size="1"
                               variant="soft"
                               onClick={() => {
                                 triageRequested.current = true;
                                 setTriageError(null);
-                                void callAgent(NEWS_METHODS.triageNow, {}).catch((error) => {
+                                void callAgent(
+                                  NEWS_METHODS.triageNow,
+                                  {},
+                                ).catch((error) => {
                                   triageRequested.current = false;
                                   setTriageError(errorMessage(error));
                                 });
@@ -1036,41 +1224,70 @@ export default function NewsPanel() {
                         pending={latestPending}
                         busy={Boolean(activeAction)}
                         onCreate={() =>
-                          settle(perform(NEWS_METHODS.refreshNow, { briefing: true }))
+                          settle(
+                            perform(NEWS_METHODS.refreshNow, {
+                              briefing: true,
+                            }),
+                          )
                         }
                       />
                     ) : null}
 
                     {overview && !hasSources ? (
-                      <Onboarding action={perform} activeAction={activeAction} />
+                      <Onboarding
+                        action={perform}
+                        activeAction={activeAction}
+                      />
                     ) : null}
 
-                    <Flex className="news-tabs" align="center" gap="2" wrap="wrap">
+                    <Flex
+                      className="news-tabs"
+                      align="center"
+                      gap="2"
+                      wrap="wrap"
+                    >
                       <SegmentedControl.Root
                         value={tab}
                         onValueChange={(value) => setTab(value as ReaderTab)}
                       >
-                        <SegmentedControl.Item value="inbox">Inbox</SegmentedControl.Item>
-                        <SegmentedControl.Item value="saved">Saved</SegmentedControl.Item>
-                        <SegmentedControl.Item value="briefings">Briefings</SegmentedControl.Item>
+                        <SegmentedControl.Item value="inbox">
+                          Inbox
+                        </SegmentedControl.Item>
+                        <SegmentedControl.Item value="saved">
+                          Saved
+                        </SegmentedControl.Item>
+                        <SegmentedControl.Item value="briefings">
+                          Briefings
+                        </SegmentedControl.Item>
                       </SegmentedControl.Root>
                       {tab === "inbox" ? (
                         <SegmentedControl.Root
                           size="1"
                           value={inboxView}
-                          onValueChange={(value) => setInboxView(value as InboxView)}
+                          onValueChange={(value) =>
+                            setInboxView(value as InboxView)
+                          }
                         >
-                          <SegmentedControl.Item value="all">All</SegmentedControl.Item>
-                          <SegmentedControl.Item value="unread">Unread</SegmentedControl.Item>
+                          <SegmentedControl.Item value="all">
+                            All
+                          </SegmentedControl.Item>
+                          <SegmentedControl.Item value="unread">
+                            Unread
+                          </SegmentedControl.Item>
                         </SegmentedControl.Root>
                       ) : null}
                       <Box flexGrow="1" />
                       {tab !== "briefings" && sources.length > 1 ? (
                         <Select.Root
                           value={source || "__all"}
-                          onValueChange={(value) => setSource(value === "__all" ? "" : value)}
+                          onValueChange={(value) =>
+                            setSource(value === "__all" ? "" : value)
+                          }
                         >
-                          <Select.Trigger variant="soft" aria-label="Filter by source" />
+                          <Select.Trigger
+                            variant="soft"
+                            aria-label="Filter by source"
+                          />
                           <Select.Content>
                             <Select.Item value="__all">All sources</Select.Item>
                             {sources.map((item) => (
@@ -1081,12 +1298,15 @@ export default function NewsPanel() {
                           </Select.Content>
                         </Select.Root>
                       ) : null}
-                      {tab === "inbox" && inbox.articles.some((article) => !article.read) ? (
+                      {tab === "inbox" &&
+                      inbox.articles.some((article) => !article.read) ? (
                         <Button
                           size="1"
                           variant="ghost"
                           disabled={Boolean(activeAction)}
-                          onClick={() => settle(perform(NEWS_METHODS.markAllRead, {}))}
+                          onClick={() =>
+                            settle(perform(NEWS_METHODS.markAllRead, {}))
+                          }
                         >
                           Mark all read
                         </Button>
@@ -1127,8 +1347,14 @@ export default function NewsPanel() {
                             {briefing.tldr ? (
                               <Markdown>{briefing.tldr}</Markdown>
                             ) : (
-                              <Text size="2" color={briefing.status === "error" ? "red" : "gray"}>
-                                {briefing.lastError ?? "This briefing is still being prepared."}
+                              <Text
+                                size="2"
+                                color={
+                                  briefing.status === "error" ? "red" : "gray"
+                                }
+                              >
+                                {briefing.lastError ??
+                                  "This briefing is still being prepared."}
                               </Text>
                             )}
                             <Separator size="4" mt="4" />
@@ -1137,9 +1363,14 @@ export default function NewsPanel() {
                       </Flex>
                     ) : searching ? (
                       search.status === "loading" ? (
-                        <LoadingState label={`Searching for “${query.trim()}”…`} />
+                        <LoadingState
+                          label={`Searching for “${query.trim()}”…`}
+                        />
                       ) : search.status === "error" ? (
-                        <EmptyState title="Search failed" detail={search.error ?? "Try again."} />
+                        <EmptyState
+                          title="Search failed"
+                          detail={search.error ?? "Try again."}
+                        />
                       ) : search.status === "ready" &&
                         search.articles.length === 0 &&
                         search.briefings.length === 0 ? (
@@ -1161,7 +1392,9 @@ export default function NewsPanel() {
                               </Text>
                               {search.briefings.map((briefing) => (
                                 <Box key={briefing.briefingId}>
-                                  {briefing.tldr ? <Markdown>{briefing.tldr}</Markdown> : null}
+                                  {briefing.tldr ? (
+                                    <Markdown>{briefing.tldr}</Markdown>
+                                  ) : null}
                                 </Box>
                               ))}
                               <Separator size="4" />
@@ -1182,12 +1415,18 @@ export default function NewsPanel() {
                       )
                     ) : activePage.status === "loading" ? (
                       <LoadingState
-                        label={tab === "saved" ? "Loading Saved…" : "Loading your reader…"}
+                        label={
+                          tab === "saved"
+                            ? "Loading Saved…"
+                            : "Loading your reader…"
+                        }
                       />
                     ) : activePage.status === "error" ? (
                       <EmptyState
                         title={
-                          tab === "saved" ? "Saved could not load" : "The reader could not load"
+                          tab === "saved"
+                            ? "Saved could not load"
+                            : "The reader could not load"
                         }
                         detail={activePage.error ?? "Try updating again."}
                       />
@@ -1236,7 +1475,8 @@ export default function NewsPanel() {
                         onClick={() => void loadMore()}
                         style={{ alignSelf: "center" }}
                       >
-                        {activeAction === "load-more" ? <Spinner /> : null} Load older stories
+                        {activeAction === "load-more" ? <Spinner /> : null} Load
+                        older stories
                       </Button>
                     ) : null}
                   </Flex>
@@ -1270,7 +1510,8 @@ export default function NewsPanel() {
                     theme={theme}
                     heightMode="container"
                     installedAgents={installedAgents}
-                    sandbox={sandbox}
+                    features={FULL_AGENTIC_CHAT_FEATURES}
+                    importLoader={importLoader}
                   />
                 </Box>
               </Flex>
@@ -1278,7 +1519,10 @@ export default function NewsPanel() {
           </Flex>
 
           <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <Dialog.Content maxWidth="940px" style={{ maxHeight: "88dvh", overflow: "auto" }}>
+            <Dialog.Content
+              maxWidth="940px"
+              style={{ maxHeight: "88dvh", overflow: "auto" }}
+            >
               <Dialog.Title>Sources & preferences</Dialog.Title>
               <Dialog.Description size="2" color="gray" mb="5">
                 Shape what News gathers and how it briefs you.
@@ -1352,7 +1596,10 @@ function ArticleList({
   onSave: (article: ArticleRow, saved: boolean) => void;
   onDeepDive: (article: ArticleRow) => Promise<void>;
   onRead: (article: ArticleRow) => void;
-  onReact: (article: ArticleRow, reaction: "more" | "less" | "mute_source") => void;
+  onReact: (
+    article: ArticleRow,
+    reaction: "more" | "less" | "mute_source",
+  ) => void;
 }) {
   return (
     <Flex direction="column">

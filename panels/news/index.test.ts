@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import React from "react";
+import { createElement, type ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,37 +14,31 @@ vi.mock("@workspace/runtime", () => ({
   createDurableObjectServiceClient: () => ({ call: async () => null }),
   openPanel: vi.fn(),
   panel: { stateArgs: { set: vi.fn() } },
-  rpc: {
-    selfId: "panel:news-test",
-    call: vi.fn(),
-  },
+  rpc: { selfId: "panel:news-test", call: vi.fn() },
 }));
-
-vi.mock("@workspace/runtime/internal/diagnostics", () => ({ recoveryCoordinator: {} }));
-
-vi.mock("@workspace/react", async () => {
-  const actual = await vi.importActual<typeof import("@workspace/react")>("@workspace/react");
-  return {
-    ...actual,
-    usePanelTheme: () => "dark",
-    useStateArgs: () => fixture.stateArgs,
-  };
-});
-
-vi.mock("@workspace/ui/panel", () => ({ useAppTheme: () => ({}) }));
-
+vi.mock("@workspace/runtime/internal/diagnostics", () => ({
+  recoveryCoordinator: {},
+}));
+vi.mock("@workspace/react", async () => ({
+  ...(await vi.importActual<typeof import("@workspace/react")>(
+    "@workspace/react",
+  )),
+  useHostCommands: () => undefined,
+  usePanelTheme: () => "dark",
+  usePanelThemeConfig: () => ({}),
+  useStateArgs: () => fixture.stateArgs,
+}));
 vi.mock("@workspace/agentic-chat", () => ({
-  AgenticChat: () => <div>Agent chat</div>,
-  ErrorBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  AgenticChat: () => createElement("div", null, "Agent chat"),
+  ErrorBoundary: ({ children }: { children: ReactNode }) => children,
+  FULL_AGENTIC_CHAT_FEATURES: [],
   markdownComponents: {},
 }));
-
 vi.mock("@workspace/agentic-core", () => ({
-  createPanelSandboxConfig: () => ({}),
+  createPanelImportLoader: () => async () => ({ bundle: "", format: "cjs" }),
   launchAgentIntoChannel: () => fixture.never,
   parseSignalEvent: () => null,
 }));
-
 vi.mock("@workspace/pubsub", () => ({
   connectViaRpc: () => ({
     ready: () => fixture.never,
@@ -52,10 +46,9 @@ vi.mock("@workspace/pubsub", () => ({
     close: vi.fn(),
   }),
 }));
-
 vi.mock("@workspace/channel-fork", () => ({ forkConversation: vi.fn() }));
 
-import NewsPanel from "./index.js";
+import NewsPanel from "./index";
 
 describe("NewsPanel bootstrap", () => {
   beforeEach(() => {
@@ -63,10 +56,7 @@ describe("NewsPanel bootstrap", () => {
   });
 
   it("keeps a stable hook order when bootstrap supplies the channel", () => {
-    // Bootstrap derives and stores a channel from the context in its first
-    // effect. That state transition used to cross an early return which skipped
-    // the palette hooks, triggering React's "Rendered more hooks" invariant.
-    expect(() => render(<NewsPanel />)).not.toThrow();
+    expect(() => render(createElement(NewsPanel))).not.toThrow();
     expect(screen.getByRole("heading", { name: "News" })).toBeTruthy();
   });
 });

@@ -1,4 +1,12 @@
-systemEpoch: 57
+systemEpoch: 58
+template:
+  name: News
+  description: A news panel, feed tools, and an agent for collecting and briefing news.
+  repositories:
+    - packages/feeds
+    - panels/news
+    - workers/news-agent
+  files: []
 templates:
   use:
     - url: git+https://github.com/panticonic/vibestudio-workspace-base.git

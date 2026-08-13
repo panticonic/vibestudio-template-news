@@ -1,11 +1,6 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 
-/**
- * Production-baseline News tables (see NewsAgentWorker.schemaVersion).
- * Future shape changes require an ordered migration; earlier experimental
- * layouts are rejected intact because no lossless historical translation is
- * known.
- */
+/** The only supported News storage shape for the current system epoch. */
 export function createNewsTables(sql: SqlStorage): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS news_channel_state (
@@ -91,11 +86,11 @@ export function createNewsTables(sql: SqlStorage): void {
   `);
   sql.exec(
     `CREATE INDEX IF NOT EXISTS idx_news_articles_unbriefed
-     ON news_articles(channel_id, briefed_in, fetched_at)`
+     ON news_articles(channel_id, briefed_in, fetched_at)`,
   );
   sql.exec(
     `CREATE INDEX IF NOT EXISTS idx_news_articles_triaged
-     ON news_articles(channel_id, triaged, fetched_at)`
+     ON news_articles(channel_id, triaged, fetched_at)`,
   );
   sql.exec(`
     CREATE TABLE IF NOT EXISTS news_briefings (
