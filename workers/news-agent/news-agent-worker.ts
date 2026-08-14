@@ -1489,7 +1489,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       )
       .toArray()[0];
     if (Number(notifyRow?.["notify"] ?? 1) !== 0) {
-      this.notifyBriefingReady(kept, sourcesRead);
+      await this.notifyBriefingReady(channelId, briefingId, kept, sourcesRead);
     }
     return {
       published: briefingId,
@@ -1498,32 +1498,61 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     };
   }
 
-  /** Proactive "your briefing is ready" shell notification. Best-effort — a
-   *  notification failure must never fail the briefing. */
-  private notifyBriefingReady(
+  /**
+   * A finished briefing is exactly the thing a phone is for: the run happened
+   * while nobody was watching. It escalates to the channel's owner at the
+   * `inbox` rung — durable entry plus push, no screen seized — and the deep
+   * link opens this channel focused on the briefing card that already exists
+   * there. A manual "Brief me now" never reaches here: the reader is already
+   * looking at the panel that ran it.
+   *
+   * Best-effort. A failed escalation must never fail the briefing, which is
+   * already durable in the channel.
+   */
+  private async notifyBriefingReady(
+    channelId: string,
+    briefingId: string,
     stories: NewsStoryRef[],
     sourcesRead?: number,
-  ): void {
+  ): Promise<void> {
     if (stories.length === 0) return;
+    const owner = this.channelOwnerUserId(channelId);
+    if (!owner) return;
     const headlines = stories.slice(0, 3).map((story) => story.title);
     const more =
       stories.length > headlines.length
-        ? ` +${stories.length - headlines.length} more`
+        ? `\n\n_+${stories.length - headlines.length} more_`
         : "";
     const readNote =
       sourcesRead && sourcesRead > 0
         ? ` · ${sourcesRead} source${sourcesRead > 1 ? "s" : ""} read`
         : "";
-    this.notifications
-      .show({
-        type: "info",
-        title: `📰 Your briefing is ready — ${stories.length} stor${stories.length > 1 ? "ies" : "y"}${readNote}`,
-        message: `${headlines.join(" · ")}${more}`,
-        ttl: 12_000,
-      })
-      .catch((err) =>
-        console.warn("[NewsAgent] briefing notification failed:", err),
-      );
+    try {
+      await this.escalateNotify({
+        userId: owner,
+        channelId,
+        messageId: briefingCardKey(briefingId),
+        senderParticipantId: this.participantId(),
+        senderHandle: "news",
+        rung: "inbox",
+        title: `Your briefing is ready — ${stories.length} stor${stories.length > 1 ? "ies" : "y"}${readNote}`,
+        message: `${headlines.map((headline) => `- ${headline}`).join("\n")}${more}`,
+      });
+    } catch (err) {
+      console.warn("[NewsAgent] briefing escalation failed:", err);
+    }
+  }
+
+  /** The single person on this channel, when there is one. See the messaging
+   *  plan's `owner` rule: a channel with several people has no unambiguous
+   *  owner, and guessing one is how a briefing reaches the wrong reader. */
+  private channelOwnerUserId(channelId: string): string | null {
+    const users = this.rosterSnapshot(channelId).filter(
+      (entry) => entry.ref.kind === "user",
+    );
+    if (users.length !== 1) return null;
+    const id = users[0]?.ref.participantId ?? users[0]?.participantId ?? "";
+    return id.startsWith("user:") ? id.slice("user:".length) : id || null;
   }
 
   async briefingHistory(
