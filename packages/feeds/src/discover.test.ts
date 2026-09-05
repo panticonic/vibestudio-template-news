@@ -18,6 +18,15 @@ describe("discoverFeedUrl", () => {
     expect(discoverFeedUrl(html, "https://x.com")).toBe("https://x.com/rss.xml");
   });
 
+  it("skips malformed preferred URLs while retaining format preference among usable feeds", () => {
+    const html = `<head>
+      <link rel="alternate" type="application/rss+xml" href="https://[broken">
+      <link rel="alternate" type="application/feed+json" href="/feed.json">
+      <link rel="alternate" type="application/atom+xml" href="/atom.xml">
+    </head>`;
+    expect(discoverFeedUrl(html, "https://example.com")).toBe("https://example.com/atom.xml");
+  });
+
   it("ignores non-feed alternate links and returns null when none match", () => {
     const html = `<head>
       <link rel="alternate" hreflang="fr" href="/fr">

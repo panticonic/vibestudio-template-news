@@ -107,6 +107,45 @@ describe("parseFeed", () => {
     expect(item.guid).toBe("jf-1");
   });
 
+  it("preserves numeric-looking XML titles and identifiers verbatim", () => {
+    const feed = parseFeed(
+      "<rss><channel><title>00123</title><item><title>false</title><link>https://example.com/a</link><guid>000042</guid></item></channel></rss>"
+    );
+    expect(feed.title).toBe("00123");
+    expect(feed.items[0]).toMatchObject({ title: "false", guid: "000042" });
+  });
+
+  it("keeps untitled JSON Feed entries and treats content_text as plain text", () => {
+    const feed = parseFeed(
+      JSON.stringify({
+        version: "https://jsonfeed.org/version/1.1",
+        items: [
+          null,
+          42,
+          [],
+          {
+            id: "post",
+            url: "https://example.com/post",
+            content_text: "Use <button> &amp; keep this text",
+            authors: [null, { name: "Ada" }],
+          },
+        ],
+      })
+    );
+    expect(feed.items).toEqual([
+      expect.objectContaining({
+        url: "https://example.com/post",
+        title: "https://example.com/post",
+        summary: "Use <button> &amp; keep this text",
+        author: "Ada",
+      }),
+    ]);
+  });
+
+  it("reports non-object JSON roots as feed errors", () => {
+    expect(() => parseFeed("null", "application/feed+json")).toThrow(FeedParseError);
+  });
+
   it("sniffs JSON feeds without a content-type hint", () => {
     const feed = parseFeed(JSON_FEED);
     expect(feed.items).toHaveLength(1);

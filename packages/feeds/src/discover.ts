@@ -43,13 +43,13 @@ export function discoverFeedUrl(html: string, baseUrl: string): string | null {
   }
   if (candidates.length === 0) return null;
 
-  const pick =
-    candidates.find((c) => c.type.includes("rss")) ??
-    candidates.find((c) => c.type.includes("atom")) ??
-    candidates[0]!;
-  try {
-    return new URL(pick.href, baseUrl).toString();
-  } catch {
-    return null;
+  const priority = (type: string) => (type.includes("rss") ? 0 : type.includes("atom") ? 1 : 2);
+  for (const candidate of candidates.sort((a, b) => priority(a.type) - priority(b.type))) {
+    try {
+      return new URL(candidate.href, baseUrl).toString();
+    } catch {
+      // A broken advertisement must not hide another usable feed on the page.
+    }
   }
+  return null;
 }

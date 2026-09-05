@@ -54,6 +54,8 @@ export function parseFeed(body: string, contentType?: string, baseUrl?: string):
     // Feeds embed HTML inside CDATA; keep it as raw string content.
     cdataPropName: "__cdata",
     trimValues: true,
+    // Titles and identifiers are text, even when they resemble numbers or booleans.
+    parseTagValue: false,
   });
   let doc: Record<string, unknown>;
   try {
@@ -75,6 +77,10 @@ export function parseFeed(body: string, contentType?: string, baseUrl?: string):
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined || value === null) return [];
   return Array.isArray(value) ? value : [value];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Extract text from a fast-xml-parser node that may be a string, number, or {#text, __cdata, @_...}. */
@@ -170,7 +176,11 @@ function parseRdf(rdf: Record<string, unknown>, baseUrl?: string): ParsedFeed {
       author: text(item["dc:creator"]),
     });
   }
-  return { title: text(channel["title"]), link: absolutize(text(channel["link"]), baseUrl), items };
+  return {
+    title: text(channel["title"]),
+    link: absolutize(text(channel["link"]), baseUrl),
+    items,
+  };
 }
 
 // ── Atom ────────────────────────────────────────────────────────────────────
@@ -230,29 +240,38 @@ function parseJsonFeed(body: string, baseUrl?: string): ParsedFeed {
   } catch (err) {
     throw new FeedParseError(`invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if (!isRecord(doc)) throw new FeedParseError("JSON Feed must be an object");
   const version = doc["version"];
   if (typeof version !== "string" || !version.includes("jsonfeed.org")) {
     throw new FeedParseError("JSON document is not a JSON Feed (missing jsonfeed.org version)");
   }
   const items: FeedItem[] = [];
   for (const raw of asArray(doc["items"] as unknown[])) {
-    const item = raw as Record<string, unknown>;
+    if (!isRecord(raw)) continue;
+    const item = raw;
     const url = absolutize(
       typeof item["url"] === "string" ? (item["url"] as string) : undefined,
-      baseUrl,
+      baseUrl
     );
-    const title = typeof item["title"] === "string" ? (item["title"] as string) : undefined;
-    if (!url || !title) continue;
-    const authors = asArray(item["authors"] as unknown[]) as Array<Record<string, unknown>>;
+    if (!url) continue;
+    // JSON Feed explicitly supports untitled microblog entries. Keep the actual
+    // destination as their label rather than silently discarding the item.
+    const title = typeof item["title"] === "string" && item["title"] ? item["title"] : url;
+    const authors = asArray(item["authors"] as unknown[]).filter(isRecord);
     items.push({
       url,
       title,
       summary:
         typeof item["summary"] === "string"
           ? (item["summary"] as string)
-          : stripHtml(typeof item["content_text"] === "string" ? (item["content_text"] as string) : undefined),
-      contentHtml: typeof item["content_html"] === "string" ? (item["content_html"] as string) : undefined,
-      publishedAt: parseDate(typeof item["date_published"] === "string" ? (item["date_published"] as string) : undefined),
+          : typeof item["content_text"] === "string"
+            ? item["content_text"]
+            : undefined,
+      contentHtml:
+        typeof item["content_html"] === "string" ? (item["content_html"] as string) : undefined,
+      publishedAt: parseDate(
+        typeof item["date_published"] === "string" ? (item["date_published"] as string) : undefined
+      ),
       author: typeof authors[0]?.["name"] === "string" ? (authors[0]["name"] as string) : undefined,
       guid: typeof item["id"] === "string" ? (item["id"] as string) : undefined,
     });
