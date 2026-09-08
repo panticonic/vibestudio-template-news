@@ -11,7 +11,7 @@ extensions:
   - source: extensions/test-runner
   - source: extensions/claude-code
 initPanels:
-  - source: about/new
+  - source: panels/news
 providers:
   cdpClient:
     source: "@workspace/cdp-client"
