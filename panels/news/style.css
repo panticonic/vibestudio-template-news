@@ -28,6 +28,7 @@
 
 .news-header-inner,
 .news-content {
+  box-sizing: border-box;
   width: min(100%, var(--news-content-width));
   margin-inline: auto;
 }
@@ -64,7 +65,9 @@
   position: relative;
   overflow: hidden;
   border: 1px solid var(--gray-a5);
-  background: linear-gradient(135deg, var(--accent-a2), transparent 46%), var(--color-panel-solid);
+  background:
+    linear-gradient(135deg, var(--accent-a2), transparent 46%),
+    var(--color-panel-solid);
   box-shadow: 0 14px 42px -28px var(--gray-a10);
 }
 

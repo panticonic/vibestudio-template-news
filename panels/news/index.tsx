@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import {
   Badge,
@@ -78,7 +79,7 @@ import {
   type ModelCatalog,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
-import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
+import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
 import type { UrlAudience } from "@vibestudio/credential-client/urlAudience";
 import {
@@ -821,7 +822,7 @@ export default function NewsPanel() {
     if (!modelConnect) return;
     setConnectingModel(true);
     try {
-      const request = toPanelConnectRequest(modelConnect.providerId);
+      const request = toCredentialConnectRequest(modelConnect.providerId);
       if (!request)
         throw new Error(
           `No connection flow is available for ${modelConnect.providerId}`,
@@ -1450,9 +1451,21 @@ export default function NewsPanel() {
                               ? "New stories will appear here as they arrive."
                               : hasSources
                                 ? "Update sources now or come back after the next check."
-                                : "Add a source above to begin."
+                                : "Choose your first feed to start reading."
                         }
-                      />
+                      >
+                        {tab === "inbox" &&
+                          inboxView !== "unread" &&
+                          !hasSources && (
+                            <Button
+                              mt="3"
+                              disabled={!overview}
+                              onClick={() => setSettingsOpen(true)}
+                            >
+                              Add a source
+                            </Button>
+                          )}
+                      </EmptyState>
                     ) : (
                       <ArticleList
                         rows={grouped}
@@ -1560,7 +1573,15 @@ function LoadingState({ label }: { label: string }) {
   );
 }
 
-function EmptyState({ title, detail }: { title: string; detail: string }) {
+function EmptyState({
+  title,
+  detail,
+  children,
+}: {
+  title: string;
+  detail: string;
+  children?: ReactNode;
+}) {
   return (
     <Box className="news-empty">
       <Flex direction="column" gap="2" align="center" style={{ maxWidth: 420 }}>
@@ -1568,6 +1589,7 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
         <Text size="2" color="gray">
           {detail}
         </Text>
+        {children}
       </Flex>
     </Box>
   );
