@@ -208,6 +208,7 @@ template:
     - packages/quickfire-core
     - packages/react
     - packages/runtime
+    - packages/template-management
     - packages/template-registry
     - packages/test-runtime
     - packages/testkit
