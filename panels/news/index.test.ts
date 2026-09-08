@@ -19,10 +19,7 @@ vi.mock("@workspace/runtime", () => ({
 vi.mock("@workspace/runtime/internal/diagnostics", () => ({
   recoveryCoordinator: {},
 }));
-vi.mock("@workspace/react", async () => ({
-  ...(await vi.importActual<typeof import("@workspace/react")>(
-    "@workspace/react",
-  )),
+vi.mock("@workspace/react", () => ({
   useHostCommands: () => undefined,
   usePanelTheme: () => "dark",
   usePanelThemeConfig: () => ({}),
