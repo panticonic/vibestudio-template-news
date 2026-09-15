@@ -7,7 +7,6 @@ template:
   dependencies:
     - url: git+https://github.com/panticonic/vibestudio-base.git
   description: A news panel, feed tools, and an agent for collecting and briefing news.
-  files: []
   name: News
   repositories:
     - packages/feeds
