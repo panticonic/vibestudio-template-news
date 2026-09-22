@@ -46,11 +46,11 @@ import {
 } from "@radix-ui/react-icons";
 import {
   contextId as runtimeContextId,
-  createDurableObjectServiceClient,
+  credentials,
   openPanel,
   panel,
   rpc,
-  type DurableObjectServiceClient,
+  workers,
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import {
@@ -200,12 +200,8 @@ async function detectMissingModelCredential(
   const entry = catalog.models.find((model) => model.ref === modelRef);
   if (!entry?.connectable) return null;
   try {
-    const credentials = await rpc.call<Array<{ audience: UrlAudience[] }>>(
-      "main",
-      "credentials.listStoredCredentials",
-      [],
-    );
-    const audiences = credentials.flatMap(
+    const storedCredentials = await credentials.listStoredCredentials();
+    const audiences = storedCredentials.flatMap(
       (credential) => credential.audience ?? [],
     );
     return modelHasMatchingCredential(entry.baseUrl, audiences)
@@ -302,7 +298,6 @@ export default function NewsPanel() {
   const previousVisit = useRef(
     typeof stateArgs.lastVisitAt === "number" ? stateArgs.lastVisitAt : 0,
   );
-  const modelService = useRef<DurableObjectServiceClient | null>(null);
   const modelProbe = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(
     null,
   );
@@ -325,15 +320,17 @@ export default function NewsPanel() {
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
 
-        modelService.current ??= createDurableObjectServiceClient(
-          MODEL_SETTINGS_SERVICE_PROTOCOL,
-        );
         let settings: ModelSettingsSnapshot | null = null;
         try {
-          settings =
-            await modelService.current.call<ModelSettingsSnapshot>(
-              "getSettings",
-            );
+          const service = await workers.resolveService(MODEL_SETTINGS_SERVICE_PROTOCOL);
+          if (service.kind !== "durable-object") {
+            throw new Error("Model settings service is not a Durable Object");
+          }
+          settings = await rpc.call<ModelSettingsSnapshot>(
+            service.targetId,
+            "getSettings",
+            [],
+          );
         } catch (error) {
           console.warn("[News] Could not read model settings", error);
         }
@@ -827,7 +824,7 @@ export default function NewsPanel() {
         throw new Error(
           `No connection flow is available for ${modelConnect.providerId}`,
         );
-      await rpc.call("main", "credentials.connect", [request]);
+      await credentials.connect(request);
       setModelConnect(null);
       setNotice({
         tone: "green",

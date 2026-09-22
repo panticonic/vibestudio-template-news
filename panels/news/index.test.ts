@@ -11,7 +11,9 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-news-test",
-  createDurableObjectServiceClient: () => ({ call: async () => null }),
+  workers: {
+    resolveService: async () => ({ kind: "durable-object", targetId: "do:model-settings" }),
+  },
   openPanel: vi.fn(),
   panel: { stateArgs: { set: vi.fn() } },
   rpc: { selfId: "panel:news-test", call: vi.fn() },
