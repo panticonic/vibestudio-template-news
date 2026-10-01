@@ -8,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { page } from "@vitest/browser/context";
+import { page, userEvent } from "@vitest/browser/context";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/themes/vibestudio.css";
 import { NEWS_METHODS } from "@workspace/feeds";
@@ -225,4 +225,30 @@ it("retains a Saved story and its action after a rejected unsave", async () => {
   );
   expect(screen.getByRole("link", { name: titles[0] })).toBeTruthy();
   expect(remove.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("announces keyboard selection and returns focus after accepted Saved removal", async () => {
+  await page.viewport(320, 1000);
+  render(<NewsPanel />);
+  await screen.findByRole("link", { name: titles[0] });
+  const reader = screen.getByRole("region", { name: "News reader" });
+  expect(reader.getAttribute("tabindex")).toBe("0");
+  reader.focus();
+  await userEvent.keyboard("j");
+  await waitFor(() =>
+    expect(
+      screen.getByText(`Selected story: ${titles[1]}`).getAttribute("role"),
+    ).toBe("status"),
+  );
+  fireEvent.click(screen.getByRole("radio", { name: "Saved" }));
+  const remove = await screen.findByRole("button", {
+    name: `Remove ${titles[0]}`,
+  });
+  remove.focus();
+  await userEvent.keyboard("{Enter}");
+  await waitFor(() =>
+    expect(screen.queryByRole("link", { name: titles[0] })).toBeNull(),
+  );
+  expect(document.activeElement).toBe(reader);
+  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(321);
 });

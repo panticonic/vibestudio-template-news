@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Badge,
   Box,
@@ -152,8 +152,10 @@ export function ArticleCard({
   return (
     <article
       className="news-story"
+      data-article-id={article.articleId}
       data-read={article.read}
       data-selected={selected}
+      aria-current={selected ? "true" : undefined}
     >
       <Flex direction="column" gap="2">
         <Flex align="start" gap="2">
@@ -424,6 +426,7 @@ export function SettingsContent({
   action: Action;
   activeAction: string | null;
 }) {
+  const fieldId = useId();
   const [feed, setFeed] = useState("");
   const [topic, setTopic] = useState("");
   const [preferences, setPreferences] = useState(setup.preferencesText ?? "");
@@ -520,8 +523,12 @@ export function SettingsContent({
             </Flex>
           ))}
         </Box>
+        <Text as="label" htmlFor={`${fieldId}-feed`} size="2">
+          Site or feed URL
+        </Text>
         <Box className="news-form-row">
           <TextField.Root
+            id={`${fieldId}-feed`}
             value={feed}
             placeholder="Paste a site or feed URL"
             style={{ flex: 1 }}
@@ -573,8 +580,12 @@ export function SettingsContent({
             </Badge>
           ))}
         </Flex>
+        <Text as="label" htmlFor={`${fieldId}-topic`} size="2">
+          Topic to follow
+        </Text>
         <Box className="news-form-row">
           <TextField.Root
+            id={`${fieldId}-topic`}
             value={topic}
             placeholder="A topic you care about"
             style={{ flex: 1 }}
@@ -606,7 +617,11 @@ export function SettingsContent({
             Tell News what to favor, ignore, and how concise to be.
           </Text>
         </Box>
+        <Text as="label" htmlFor={`${fieldId}-preferences`} size="2">
+          Reading preferences
+        </Text>
         <TextArea
+          id={`${fieldId}-preferences`}
           rows={5}
           value={preferences}
           placeholder="More independent reporting, less product launch noise…"
@@ -693,7 +708,11 @@ export function SettingsContent({
             Move subscriptions from another reader.
           </Text>
         </Box>
+        <Text as="label" htmlFor={`${fieldId}-opml`} size="2">
+          OPML subscriptions
+        </Text>
         <TextArea
+          id={`${fieldId}-opml`}
           rows={4}
           value={opml}
           placeholder="Paste OPML here…"
@@ -741,6 +760,7 @@ export function Onboarding({
   action: Action;
   activeAction: string | null;
 }) {
+  const fieldId = useId();
   const [feed, setFeed] = useState("");
   const busy = activeAction !== null;
   return (
@@ -791,8 +811,12 @@ export function Onboarding({
             </Button>
           ))}
         </Flex>
+        <Text as="label" htmlFor={`${fieldId}-feed`} size="2">
+          Site or feed URL
+        </Text>
         <Box className="news-form-row">
           <TextField.Root
+            id={`${fieldId}-feed`}
             value={feed}
             placeholder="Or paste any site or feed URL"
             style={{ flex: 1 }}

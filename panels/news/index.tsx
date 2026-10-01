@@ -1,3 +1,4 @@
+import { OperationNotice } from "@workspace/ui/feedback";
 /**
  * News — a reader-first personal briefing app.
  *
@@ -11,6 +12,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -288,6 +290,14 @@ export default function NewsPanel() {
   const [inbox, setInbox, inboxRef] = useArticlePage(EMPTY_PAGE);
   const [saved, setSaved, savedRef] = useArticlePage(EMPTY_PAGE);
   const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH);
+  const readerElement = useRef<HTMLDivElement>(null);
+  const returnFocusToReader = useRef(false);
+  useLayoutEffect(() => {
+    if (!returnFocusToReader.current) return;
+    returnFocusToReader.current = false;
+    if (!document.activeElement || document.activeElement === document.body)
+      readerElement.current?.focus();
+  }, [saved]);
   const [tab, setTab] = useState<ReaderTab>("inbox");
   const [inboxView, setInboxView] = useState<InboxView>("all");
   const [source, setSource] = useState("");
@@ -345,7 +355,7 @@ export default function NewsPanel() {
         const channel = stateArgs.channelName ?? newsChannelName(contextId);
         const agentKey = stateArgs.agentKey ?? newsAgentKey(contextId);
         if (!stateArgs.channelName || !stateArgs.agentKey) {
-          void panel.stateArgs.set({ channelName: channel, agentKey });
+          await panel.stateArgs.set({ channelName: channel, agentKey });
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
 
@@ -723,6 +733,10 @@ export default function NewsPanel() {
   const setSavedState = useCallback(
     (article: ArticleRow, nextSaved: boolean) => {
       if (pendingSaved.current.has(article.articleId)) return;
+      const initiatedFromRow =
+        document.activeElement
+          ?.closest(".news-story")
+          ?.getAttribute("data-article-id") === article.articleId;
       pendingSaved.current.add(article.articleId);
       setSavingIds(new Set(pendingSaved.current));
       void withReaderData(async () => {
@@ -730,6 +744,13 @@ export default function NewsPanel() {
           articleId: article.articleId,
           saved: nextSaved,
         });
+        if (!nextSaved) {
+          const focused = document.activeElement?.closest(".news-story");
+          returnFocusToReader.current =
+            initiatedFromRow &&
+            (document.activeElement === document.body ||
+              focused?.getAttribute("data-article-id") === article.articleId);
+        }
         patchArticle(article.articleId, { saved: nextSaved });
         if (!nextSaved)
           setSaved((current) => ({
@@ -1113,10 +1134,22 @@ export default function NewsPanel() {
           <Flex className="news-shell">
             <Flex
               className="news-reader"
+              ref={readerElement}
               direction="column"
               onKeyDown={handleReaderKeyDown}
-              tabIndex={-1}
+              tabIndex={0}
+              role="region"
+              aria-label="News reader"
             >
+              <span
+                className="news-visually-hidden"
+                role="status"
+                aria-atomic="true"
+              >
+                {grouped[selectedIndex]
+                  ? `Selected story: ${grouped[selectedIndex].cluster.primary.title}`
+                  : ""}
+              </span>
               <header className="news-header">
                 <Flex
                   className="news-header-inner news-toolbar"
@@ -1222,26 +1255,27 @@ export default function NewsPanel() {
                 <main className="news-content">
                   <Flex direction="column" gap="4">
                     {notice ? (
-                      <Callout.Root
-                        size="1"
-                        color={notice.tone}
-                        role={notice.tone === "red" ? "alert" : "status"}
+                      <OperationNotice
+                        intent={
+                          notice.tone === "red"
+                            ? "error"
+                            : notice.tone === "green"
+                              ? "success"
+                              : "info"
+                        }
+                        actions={
+                          <IconButton
+                            size="1"
+                            variant="ghost"
+                            aria-label="Dismiss message"
+                            onClick={() => setNotice(null)}
+                          >
+                            <Cross2Icon />
+                          </IconButton>
+                        }
                       >
-                        <Callout.Text>
-                          <span className="news-notice-content">
-                            <Text size="2">{notice.text}</Text>
-                            <span style={{ flexGrow: 1 }} />
-                            <IconButton
-                              size="1"
-                              variant="ghost"
-                              aria-label="Dismiss message"
-                              onClick={() => setNotice(null)}
-                            >
-                              <Cross2Icon />
-                            </IconButton>
-                          </span>
-                        </Callout.Text>
-                      </Callout.Root>
+                        {notice.text}
+                      </OperationNotice>
                     ) : null}
                     {bootstrapStatus === "error" ? (
                       <Button

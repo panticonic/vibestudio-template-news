@@ -244,3 +244,16 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+.news-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.news-reader:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}

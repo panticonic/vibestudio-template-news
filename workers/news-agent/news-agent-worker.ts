@@ -1243,7 +1243,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   }
 
   /** Full-text-ish archive search over ingested articles and past briefing
-   *  TLDRs (SQLite LIKE; wildcards in the query are escaped). */
+   *  TLDRs, using literal case-insensitive substring matching. */
   async searchArchive(
     channelId: string,
     args: Record<string, unknown>,
@@ -1251,7 +1251,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const query = stringArg(args, "query");
     if (!query) return { query: "", articles: [], briefings: [] };
     const limit = Math.min(numberArg(args, "limit") ?? 40, 100);
-    const like = `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
     const articleRows = this.sql
       .exec(
         `SELECT ${ARTICLE_COLUMNS}
@@ -1259,25 +1258,25 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
          LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
          WHERE a.channel_id = ?
            AND (a.briefed_in IS NULL OR a.briefed_in NOT LIKE 'dropped:%')
-           AND (a.title LIKE ? ESCAPE '\\' OR a.blurb LIKE ? ESCAPE '\\'
-                OR a.summary LIKE ? ESCAPE '\\' OR a.source LIKE ? ESCAPE '\\')
+           AND (instr(lower(a.title), lower(?)) > 0 OR instr(lower(a.blurb), lower(?)) > 0
+                OR instr(lower(a.summary), lower(?)) > 0 OR instr(lower(a.source), lower(?)) > 0)
          ORDER BY COALESCE(a.published_at, a.fetched_at) DESC
          LIMIT ?`,
         channelId,
-        like,
-        like,
-        like,
-        like,
+        query,
+        query,
+        query,
+        query,
         limit,
       )
       .toArray();
     const briefingRows = this.sql
       .exec(
         `SELECT briefing_id, created_at, tldr, sources_read FROM news_briefings
-         WHERE channel_id = ? AND status = 'ready' AND tldr LIKE ? ESCAPE '\\'
+         WHERE channel_id = ? AND status = 'ready' AND instr(lower(tldr), lower(?)) > 0
          ORDER BY created_at DESC LIMIT ?`,
         channelId,
-        like,
+        query,
         Math.min(limit, 20),
       )
       .toArray();
@@ -1296,6 +1295,28 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     };
   }
 
+  /** Article identifiers are literal identities, never SQL wildcard patterns.
+   * Model tools may abbreviate an ID only when that prefix identifies one row. */
+  private resolveArticleId(
+    channelId: string,
+    idOrPrefix: string,
+  ): string | null {
+    const rows = this.sql
+      .exec(
+        `SELECT article_id FROM news_articles
+       WHERE channel_id = ? AND substr(article_id, 1, length(?)) = ? LIMIT 2`,
+        channelId,
+        idOrPrefix,
+        idOrPrefix,
+      )
+      .toArray();
+    if (rows.length > 1)
+      throw new Error(
+        `Ambiguous article ID: ${idOrPrefix}. Use the full article ID.`,
+      );
+    return rows[0] ? String(rows[0]["article_id"]) : null;
+  }
+
   async setSaved(
     channelId: string,
     args: Record<string, unknown>,
@@ -1305,14 +1326,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     if (!idOrPrefix || saved === undefined) {
       return { error: "articleId and saved are required" };
     }
+    const id = this.resolveArticleId(channelId, idOrPrefix);
+    if (!id) return { error: `unknown article: ${idOrPrefix}` };
     this.sql.exec(
-      `UPDATE news_articles SET saved = ? WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%')`,
+      `UPDATE news_articles SET saved = ? WHERE channel_id = ? AND article_id = ?`,
       saved ? 1 : 0,
       channelId,
-      idOrPrefix,
-      idOrPrefix,
+      id,
     );
-    return { articleId: idOrPrefix, saved };
+    return { articleId: id, saved };
   }
 
   async setBriefingPaused(
@@ -1340,17 +1362,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       const item = record(entry);
       const idOrPrefix = stringArg(item, "articleId");
       if (!idOrPrefix) continue;
-      const row = this.sql
-        .exec(
-          `SELECT article_id FROM news_articles
-           WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%') LIMIT 1`,
-          channelId,
-          idOrPrefix,
-          idOrPrefix,
-        )
-        .toArray()[0];
-      if (!row) continue;
-      const articleId = String(row["article_id"]);
+      const articleId = this.resolveArticleId(channelId, idOrPrefix);
+      if (!articleId) continue;
       if (booleanArg(item, "keep") === false) {
         // Drop noise: mark triaged + hidden so it never surfaces and isn't re-triaged.
         this.sql.exec(
@@ -1519,12 +1532,13 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         story.articleId,
       );
     }
-    for (const id of dropped) {
+    for (const prefix of dropped) {
+      const id = this.resolveArticleId(channelId, prefix);
+      if (!id) continue;
       this.sql.exec(
-        `UPDATE news_articles SET briefed_in = ? WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%')`,
+        `UPDATE news_articles SET briefed_in = ? WHERE channel_id = ? AND article_id = ?`,
         `dropped:${briefingId}`,
         channelId,
-        id,
         id,
       );
     }
@@ -1696,15 +1710,17 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       ? args["articleIds"].map(String)
       : [];
     if (ids.length === 0) return { error: "articleIds is required" };
-    for (const id of ids) {
+    const resolved = ids.map((id) => this.resolveArticleId(channelId, id));
+    if (resolved.some((id) => !id))
+      return { error: "An article no longer exists" };
+    for (const id of resolved) {
       this.sql.exec(
-        `UPDATE news_articles SET read = 1 WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%')`,
+        `UPDATE news_articles SET read = 1 WHERE channel_id = ? AND article_id = ?`,
         channelId,
-        id,
         id,
       );
     }
-    return { markedRead: ids.length };
+    return { markedRead: resolved.length };
   }
 
   async markAllRead(
@@ -1747,15 +1763,16 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
           "articleId and reaction ('more' | 'less' | 'mute_source') are required",
       };
     }
+    const resolvedId = this.resolveArticleId(channelId, idOrPrefix);
+    if (!resolvedId) return { error: `unknown article: ${idOrPrefix}` };
     const row = this.sql
       .exec(
         `SELECT a.article_id, a.title, a.feed_id, a.source, a.origin, f.title AS feed_title
          FROM news_articles a
          LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
-         WHERE a.channel_id = ? AND (a.article_id = ? OR a.article_id LIKE ? || '%') LIMIT 1`,
+         WHERE a.channel_id = ? AND a.article_id = ?`,
         channelId,
-        idOrPrefix,
-        idOrPrefix,
+        resolvedId,
       )
       .toArray()[0];
     if (!row) return { error: `unknown article: ${idOrPrefix}` };
@@ -1830,13 +1847,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   ): Promise<unknown> {
     const idOrPrefix = stringArg(args, "articleId");
     if (!idOrPrefix) return { error: "articleId is required" };
+    const resolvedId = this.resolveArticleId(channelId, idOrPrefix);
+    if (!resolvedId) return { error: `unknown article: ${idOrPrefix}` };
     const row = this.sql
       .exec(
         `SELECT article_id, canonical_url, title, briefed_in FROM news_articles
-         WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%') LIMIT 1`,
+         WHERE channel_id = ? AND article_id = ?`,
         channelId,
-        idOrPrefix,
-        idOrPrefix,
+        resolvedId,
       )
       .toArray()[0];
     if (!row) return { error: `unknown article: ${idOrPrefix}` };

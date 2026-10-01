@@ -184,12 +184,17 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "@workspace/testkit": "workspace:*"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "vitest": "^3.2.7",
     "@testing-library/dom": "^10.0.0",
     "@vitest/browser": "^3.2.7"
+  },
+  "exports": {
+    ".": "./index.tsx",
+    "./testkit-suite": "./testkit-suite.ts"
   }
 }

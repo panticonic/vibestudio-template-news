@@ -817,6 +817,24 @@ describe("NewsAgentWorker", () => {
     ).toBe(20);
   });
 
+  it("searches long literal text and treats wildcard characters as text", async () => {
+    const worker = await makeWorker();
+    const title =
+      "A detailed report about public infrastructure and open source software with 50%_growth";
+    await addExampleFeed(worker, [
+      { title, link: "https://example.com/long-search" },
+    ]);
+    expect(
+      await worker.searchArchive("ch-1", { query: title.toUpperCase() }),
+    ).toMatchObject({ articles: [{ title }] });
+    expect(
+      await worker.searchArchive("ch-1", { query: "50%_growth" }),
+    ).toMatchObject({ articles: [{ title }] });
+    expect(
+      await worker.searchArchive("ch-1", { query: "50__growth" }),
+    ).toMatchObject({ articles: [] });
+  });
+
   it("searchArchive matches article fields and past briefing TLDRs", async () => {
     const worker = await makeWorker();
     await addExampleFeed(worker, [
@@ -1214,6 +1232,68 @@ describe("NewsAgentWorker", () => {
       {},
     );
     expect(toolOnly.isError).toBe(true);
+  });
+
+  it("uses full literal article identities for accepted save and read actions", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(worker, [
+      { title: "Story", link: "https://example.com/literal-id" },
+    ]);
+    const id = await articleId("https://example.com/literal-id");
+    expect(id).toHaveLength(64);
+    expect(
+      await worker.setSaved("ch-1", { articleId: id, saved: true }),
+    ).toEqual({ articleId: id, saved: true });
+    expect(await worker.markRead("ch-1", { articleIds: [id] })).toEqual({
+      markedRead: 1,
+    });
+    expect(
+      worker.rowsForTest(
+        "SELECT saved, read FROM news_articles WHERE article_id = ?",
+        id,
+      )[0],
+    ).toMatchObject({ saved: 1, read: 1 });
+    expect(
+      await worker.setSaved("ch-1", { articleId: "%", saved: false }),
+    ).toMatchObject({ error: "unknown article: %" });
+    expect(
+      worker.rowsForTest(
+        "SELECT saved FROM news_articles WHERE article_id = ?",
+        id,
+      )[0],
+    ).toMatchObject({ saved: 1 });
+  });
+
+  it("rejects ambiguous abbreviations without mutating either article", async () => {
+    const worker = await makeWorker();
+    for (const suffix of ["0", "1"]) {
+      worker.execSqlForTest(
+        `INSERT INTO news_articles (channel_id, article_id, origin, canonical_url, title, fetched_at) VALUES (?, ?, 'feed', ?, ?, ?)`,
+        "ch-1",
+        "a" + suffix.repeat(63),
+        "https://example.com/ambiguous-" + suffix,
+        "Story " + suffix,
+        worker.clock,
+      );
+    }
+    await expect(
+      worker.setSaved("ch-1", { articleId: "a", saved: true }),
+    ).rejects.toThrow("Ambiguous article ID");
+    await expect(
+      worker.markRead("ch-1", { articleIds: ["a"] }),
+    ).rejects.toThrow("Ambiguous article ID");
+    expect(
+      worker.rowsForTest(
+        "SELECT saved, read FROM news_articles WHERE channel_id = ?",
+        "ch-1",
+      ),
+    ).toEqual([
+      { saved: 0, read: 0 },
+      { saved: 0, read: 0 },
+    ]);
+    expect(
+      await worker.setSaved("ch-1", { articleId: "a0", saved: true }),
+    ).toEqual({ articleId: "a" + "0".repeat(63), saved: true });
   });
 
   it("markRead excludes articles from ranking", async () => {
