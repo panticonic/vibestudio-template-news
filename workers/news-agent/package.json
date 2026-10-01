@@ -130,7 +130,8 @@
     "@workspace/feeds": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@workspace/pi-core": "workspace:*"
+    "@workspace/pi-core": "workspace:*",
+    "@workspace/agent-loop": "workspace:*"
   },
   "devDependencies": {
     "@vibestudio/rpc": "workspace:*",

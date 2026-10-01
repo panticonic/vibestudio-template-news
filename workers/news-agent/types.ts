@@ -6,7 +6,6 @@ export const MAX_FEEDBACK_SIGNALS = 24;
 /** Prune unbriefed articles older than this during polls. */
 export const ARTICLE_RETENTION_MS = 14 * 24 * 3_600_000;
 /** A briefing older than this is marked errored on the next reader operation. */
-export const BRIEFING_WATCHDOG_MS = 10 * 60_000;
 
 /** Channel role: a normal personal news channel, or a deep-dive analyst fork. */
 export type NewsChannelMode = "curator" | "analyst";

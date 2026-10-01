@@ -88,7 +88,10 @@ export function clusterArticles(articles: ArticleRow[]): ArticleCluster[] {
 export function Markdown({ children }: { children: string }) {
   return (
     <div className="message-prose">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents as Components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents as Components}
+      >
         {children}
       </ReactMarkdown>
     </div>
@@ -124,6 +127,7 @@ export function ArticleCard({
   disabled,
   onOpen,
   onSave,
+  saving = false,
   onDeepDive,
   onRead,
   onReact,
@@ -135,15 +139,22 @@ export function ArticleCard({
   disabled: boolean;
   onOpen: () => void;
   onSave: (saved: boolean) => void;
+  saving?: boolean;
   onDeepDive: () => void;
   onRead: () => void;
   onReact: (reaction: "more" | "less" | "mute_source") => void;
 }) {
   const age = relativeAge(article.publishedAt);
   const sourceAction =
-    article.origin === "feed" ? `Mute ${article.source}` : `See less from ${article.source}`;
+    article.origin === "feed"
+      ? `Mute ${article.source}`
+      : `See less from ${article.source}`;
   return (
-    <article className="news-story" data-read={article.read} data-selected={selected}>
+    <article
+      className="news-story"
+      data-read={article.read}
+      data-selected={selected}
+    >
       <Flex direction="column" gap="2">
         <Flex align="start" gap="2">
           <Box mt="1">
@@ -213,22 +224,39 @@ export function ArticleCard({
         ) : null}
 
         <Flex className="news-story-actions" align="center" gap="2" wrap="wrap">
-          <Button size="1" variant="soft" disabled={disabled} onClick={onDeepDive}>
+          <Button
+            size="1"
+            variant="soft"
+            disabled={disabled}
+            onClick={onDeepDive}
+          >
             <LightningBoltIcon /> Explore
           </Button>
           <IconButton
             size="1"
             variant="ghost"
             color={article.saved ? "amber" : "gray"}
-            disabled={disabled}
+            disabled={disabled || saving}
+            aria-busy={saving}
             aria-label={`${article.saved ? "Remove" : "Save"} ${article.title}`}
             aria-pressed={Boolean(article.saved)}
             onClick={() => onSave(!article.saved)}
           >
-            {article.saved ? <BookmarkFilledIcon /> : <BookmarkIcon />}
+            {saving ? (
+              <Spinner />
+            ) : article.saved ? (
+              <BookmarkFilledIcon />
+            ) : (
+              <BookmarkIcon />
+            )}
           </IconButton>
           {!article.read ? (
-            <Button size="1" variant="ghost" disabled={disabled} onClick={onRead}>
+            <Button
+              size="1"
+              variant="ghost"
+              disabled={disabled}
+              onClick={onRead}
+            >
               Mark read
             </Button>
           ) : null}
@@ -245,10 +273,17 @@ export function ArticleCard({
               </IconButton>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="start">
-              <DropdownMenu.Item onSelect={() => onReact("more")}>More like this</DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => onReact("less")}>Less like this</DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => onReact("more")}>
+                More like this
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => onReact("less")}>
+                Less like this
+              </DropdownMenu.Item>
               <DropdownMenu.Separator />
-              <DropdownMenu.Item color="red" onSelect={() => onReact("mute_source")}>
+              <DropdownMenu.Item
+                color="red"
+                onSelect={() => onReact("mute_source")}
+              >
                 {sourceAction}
               </DropdownMenu.Item>
             </DropdownMenu.Content>
@@ -261,7 +296,12 @@ export function ArticleCard({
             color="gray"
             aria-label={`Open ${article.title} in a new tab`}
           >
-            <a href={article.url} target="_blank" rel="noreferrer" onClick={onOpen}>
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={onOpen}
+            >
               <ExternalLinkIcon />
             </a>
           </IconButton>
@@ -291,7 +331,8 @@ export function BriefingHero({
             <Text weight="medium">Building your briefing</Text>
           </Flex>
           <Text size="2" color="gray">
-            Reading the strongest sources and connecting the stories that matter.
+            Reading the strongest sources and connecting the stories that
+            matter.
           </Text>
         </Flex>
       </Card>
@@ -300,7 +341,12 @@ export function BriefingHero({
   if (briefing?.status === "error") {
     return (
       <Card className="news-hero" size="3">
-        <Flex className="news-hero-content" direction="column" gap="3" align="start">
+        <Flex
+          className="news-hero-content"
+          direction="column"
+          gap="3"
+          align="start"
+        >
           <Badge color="red">Briefing interrupted</Badge>
           <Text size="2" color="gray">
             {briefing.lastError ?? "This briefing did not complete."}
@@ -321,7 +367,8 @@ export function BriefingHero({
               Your briefing
             </Badge>
             <Text size="1" color="gray">
-              {relativeAge(briefing.createdAt) ?? new Date(briefing.createdAt).toLocaleDateString()}{" "}
+              {relativeAge(briefing.createdAt) ??
+                new Date(briefing.createdAt).toLocaleDateString()}{" "}
               ago
             </Text>
             {briefing.sourcesRead ? (
@@ -337,14 +384,19 @@ export function BriefingHero({
   }
   return (
     <Card className="news-hero" size="3">
-      <Flex className="news-hero-content" direction="column" gap="3" align="start">
+      <Flex
+        className="news-hero-content"
+        direction="column"
+        gap="3"
+        align="start"
+      >
         <Flex align="center" gap="2">
           <ReaderIcon />
           <Heading size="4">A calmer way to catch up</Heading>
         </Flex>
         <Text size="2" color="gray">
-          Your sources are gathered continuously. Create a briefing when you want the concise
-          version.
+          Your sources are gathered continuously. Create a briefing when you
+          want the concise version.
         </Text>
         <Button disabled={busy} onClick={onCreate}>
           <LightningBoltIcon /> Create my first briefing
@@ -354,7 +406,10 @@ export function BriefingHero({
   );
 }
 
-type Action = (method: string, args: Record<string, unknown>) => Promise<unknown>;
+type Action = (
+  method: string,
+  args: Record<string, unknown>,
+) => Promise<unknown>;
 
 function settle(promise: Promise<unknown>): void {
   void promise.catch(() => undefined);
@@ -405,7 +460,8 @@ export function SettingsContent({
             Sources
           </Heading>
           <Text size="2" color="gray">
-            Feeds are checked in the background. Pause one without losing its history.
+            Feeds are checked in the background. Pause one without losing its
+            history.
           </Text>
         </Box>
         <Box>
@@ -415,20 +471,34 @@ export function SettingsContent({
             </Text>
           ) : null}
           {setup.feeds.map((item) => (
-            <Flex className="news-source-row" key={item.feedId} align="center" gap="2">
+            <Flex
+              className="news-source-row"
+              key={item.feedId}
+              align="center"
+              gap="2"
+            >
               <Switch
                 checked={item.enabled}
                 disabled={busy}
                 aria-label={`${item.enabled ? "Pause" : "Resume"} ${item.title ?? item.url}`}
                 onCheckedChange={(enabled) =>
-                  settle(action(NEWS_METHODS.setFeedEnabled, { feedId: item.feedId, enabled }))
+                  settle(
+                    action(NEWS_METHODS.setFeedEnabled, {
+                      feedId: item.feedId,
+                      enabled,
+                    }),
+                  )
                 }
               />
               <Box style={{ minWidth: 0, flex: 1 }}>
                 <Text size="2" weight="medium" truncate>
                   {item.title ?? item.url}
                 </Text>
-                <Text size="1" color={item.failCount > 0 ? "red" : "gray"} truncate>
+                <Text
+                  size="1"
+                  color={item.failCount > 0 ? "red" : "gray"}
+                  truncate
+                >
                   {item.failCount > 0
                     ? (item.lastStatus ?? `${item.failCount} recent failures`)
                     : item.url}
@@ -439,7 +509,11 @@ export function SettingsContent({
                 color="red"
                 disabled={busy}
                 aria-label={`Remove ${item.title ?? item.url}`}
-                onClick={() => settle(action(NEWS_METHODS.removeFeed, { feedId: item.feedId }))}
+                onClick={() =>
+                  settle(
+                    action(NEWS_METHODS.removeFeed, { feedId: item.feedId }),
+                  )
+                }
               >
                 <Cross2Icon />
               </IconButton>
@@ -456,8 +530,12 @@ export function SettingsContent({
               if (event.key === "Enter") void submitFeed();
             }}
           />
-          <Button disabled={busy || !feed.trim()} onClick={() => void submitFeed()}>
-            {activeAction === NEWS_METHODS.addFeed ? <Spinner /> : <PlusIcon />} Add feed
+          <Button
+            disabled={busy || !feed.trim()}
+            onClick={() => void submitFeed()}
+          >
+            {activeAction === NEWS_METHODS.addFeed ? <Spinner /> : <PlusIcon />}{" "}
+            Add feed
           </Button>
         </Box>
 
@@ -473,14 +551,22 @@ export function SettingsContent({
         </Box>
         <Flex gap="2" wrap="wrap">
           {setup.followedTopics.map((item) => (
-            <Badge key={item.topic} size="2" color={item.enabled ? "blue" : "gray"}>
+            <Badge
+              key={item.topic}
+              size="2"
+              color={item.enabled ? "blue" : "gray"}
+            >
               {item.topic}
               <IconButton
                 size="1"
                 variant="ghost"
                 disabled={busy}
                 aria-label={`Unfollow ${item.topic}`}
-                onClick={() => settle(action(NEWS_METHODS.unfollowTopic, { topic: item.topic }))}
+                onClick={() =>
+                  settle(
+                    action(NEWS_METHODS.unfollowTopic, { topic: item.topic }),
+                  )
+                }
               >
                 <Cross2Icon />
               </IconButton>
@@ -497,8 +583,16 @@ export function SettingsContent({
               if (event.key === "Enter") void submitTopic();
             }}
           />
-          <Button disabled={busy || !topic.trim()} onClick={() => void submitTopic()}>
-            {activeAction === NEWS_METHODS.followTopic ? <Spinner /> : <PlusIcon />} Follow
+          <Button
+            disabled={busy || !topic.trim()}
+            onClick={() => void submitTopic()}
+          >
+            {activeAction === NEWS_METHODS.followTopic ? (
+              <Spinner />
+            ) : (
+              <PlusIcon />
+            )}{" "}
+            Follow
           </Button>
         </Box>
       </Flex>
@@ -521,7 +615,9 @@ export function SettingsContent({
         <Button
           variant="soft"
           disabled={busy || preferences === (setup.preferencesText ?? "")}
-          onClick={() => settle(action(NEWS_METHODS.setPreferences, { text: preferences }))}
+          onClick={() =>
+            settle(action(NEWS_METHODS.setPreferences, { text: preferences }))
+          }
         >
           Save preferences
         </Button>
@@ -550,7 +646,9 @@ export function SettingsContent({
             disabled={busy}
             aria-label="Automatic briefings"
             onCheckedChange={(active) =>
-              settle(action(NEWS_METHODS.setBriefingPaused, { paused: !active }))
+              settle(
+                action(NEWS_METHODS.setBriefingPaused, { paused: !active }),
+              )
             }
           />
         </Flex>
@@ -568,7 +666,11 @@ export function SettingsContent({
             disabled={busy}
             onChange={(event) => {
               if (event.target.value)
-                settle(action(NEWS_METHODS.setSchedule, { briefingAt: event.target.value }));
+                settle(
+                  action(NEWS_METHODS.setSchedule, {
+                    briefingAt: event.target.value,
+                  }),
+                );
             }}
             style={{
               width: "100%",
@@ -603,13 +705,15 @@ export function SettingsContent({
           onClick={() =>
             void (async () => {
               try {
-                const result = (await action(NEWS_METHODS.importOpml, { opml: opml.trim() })) as {
+                const result = (await action(NEWS_METHODS.importOpml, {
+                  opml: opml.trim(),
+                })) as {
                   imported?: number;
                   failed?: number;
                   total?: number;
                 };
                 setImportResult(
-                  `${result.imported ?? 0} imported · ${result.failed ?? 0} failed · ${result.total ?? 0} found`
+                  `${result.imported ?? 0} imported · ${result.failed ?? 0} failed · ${result.total ?? 0} found`,
                 );
                 setOpml("");
               } catch {
@@ -650,8 +754,8 @@ export function Onboarding({
             What do you want to keep up with?
           </Heading>
           <Text size="2" color="gray">
-            Choose a few trusted sources or topics. News will quietly gather them and help you catch
-            up when you are ready.
+            Choose a few trusted sources or topics. News will quietly gather
+            them and help you catch up when you are ready.
           </Text>
         </Box>
         <Box className="news-onboarding-grid">
@@ -661,7 +765,9 @@ export function Onboarding({
               size="3"
               variant="surface"
               disabled={busy}
-              onClick={() => settle(action(NEWS_METHODS.addFeed, { url: item.url }))}
+              onClick={() =>
+                settle(action(NEWS_METHODS.addFeed, { url: item.url }))
+              }
             >
               <PlusIcon /> {item.label}
               <Text size="1" color="gray">
@@ -677,7 +783,9 @@ export function Onboarding({
               size="1"
               variant="outline"
               disabled={busy}
-              onClick={() => settle(action(NEWS_METHODS.followTopic, { topic: item }))}
+              onClick={() =>
+                settle(action(NEWS_METHODS.followTopic, { topic: item }))
+              }
             >
               <PlusIcon /> {item}
             </Button>
@@ -703,7 +811,8 @@ export function Onboarding({
               })()
             }
           >
-            {activeAction === NEWS_METHODS.addFeed ? <Spinner /> : <PlusIcon />} Add source
+            {activeAction === NEWS_METHODS.addFeed ? <Spinner /> : <PlusIcon />}{" "}
+            Add source
           </Button>
         </Box>
         <Flex align="center" gap="2">

@@ -112,6 +112,7 @@ import {
 } from "./components.js";
 import "@workspace/ui/foundation.css";
 import "./style.css";
+import { refreshArticleWindow } from "./article-window.js";
 
 type ReaderTab = "inbox" | "saved" | "briefings";
 type InboxView = "all" | "unread";
@@ -246,6 +247,7 @@ async function callParticipant(
 function statusCopy(overview: Overview | null, loading: boolean): string {
   if (loading) return "Connecting your reader…";
   if (!overview) return "Reader unavailable";
+  if (overview.setup.lastError) return overview.setup.lastError;
   if (overview.untriagedCount > 0) {
     return `Organizing ${overview.untriagedCount} new ${overview.untriagedCount === 1 ? "story" : "stories"}`;
   }
@@ -253,6 +255,21 @@ function statusCopy(overview: Overview | null, loading: boolean): string {
     return `Up to date · ${overview.setup.scheduleSummary}`;
   }
   return overview.setup.scheduleSummary;
+}
+
+/** The ref is the immediate page owner; React renders the same snapshots. */
+function useArticlePage(initial: ArticlePage) {
+  const current = useRef(initial);
+  const [page, render] = useState(initial);
+  const update = useCallback(
+    (next: ArticlePage | ((previous: ArticlePage) => ArticlePage)) => {
+      current.current =
+        typeof next === "function" ? next(current.current) : next;
+      render(current.current);
+    },
+    [],
+  );
+  return [page, update, current] as const;
 }
 
 export default function NewsPanel() {
@@ -268,14 +285,16 @@ export default function NewsPanel() {
   const [bootstrapNonce, setBootstrapNonce] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [briefings, setBriefings] = useState<BriefingRow[]>([]);
-  const [inbox, setInbox] = useState<ArticlePage>(EMPTY_PAGE);
-  const [saved, setSaved] = useState<ArticlePage>(EMPTY_PAGE);
+  const [inbox, setInbox, inboxRef] = useArticlePage(EMPTY_PAGE);
+  const [saved, setSaved, savedRef] = useArticlePage(EMPTY_PAGE);
   const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH);
   const [tab, setTab] = useState<ReaderTab>("inbox");
   const [inboxView, setInboxView] = useState<InboxView>("all");
   const [source, setSource] = useState("");
   const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedArticleId, setSelectedArticleId] = useState<string | null>(
+    null,
+  );
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -289,6 +308,16 @@ export default function NewsPanel() {
 
   const channelName = stateArgs.channelName ?? bootstrapChannel;
   const clientRef = useRef<PubSubClient | null>(null);
+  const dataQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const refreshPending = useRef<Promise<void> | null>(null);
+  const withReaderData = useCallback(
+    <T,>(operation: () => Promise<T>): Promise<T> => {
+      const pending = dataQueue.current.catch(() => undefined).then(operation);
+      dataQueue.current = pending;
+      return pending;
+    },
+    [],
+  );
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   const deepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(
     async () => undefined,
@@ -322,7 +351,9 @@ export default function NewsPanel() {
 
         let settings: ModelSettingsSnapshot | null = null;
         try {
-          const service = await workers.resolveService(MODEL_SETTINGS_SERVICE_PROTOCOL);
+          const service = await workers.resolveService(
+            MODEL_SETTINGS_SERVICE_PROTOCOL,
+          );
           if (service.kind !== "durable-object") {
             throw new Error("Model settings service is not a Durable Object");
           }
@@ -386,52 +417,104 @@ export default function NewsPanel() {
 
   const refresh = useCallback(async () => {
     if (!participantId || !channelName) return;
-    setInbox((current) =>
-      current.status === "idle" ? { ...current, status: "loading" } : current,
-    );
-    try {
-      const [nextOverview, articleResult, historyResult] = await Promise.all([
-        callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
-        callAgent(NEWS_METHODS.listArticles, {
-          limit: 40,
-          triagedOnly: true,
-        }) as Promise<{
-          articles: ArticleRow[];
-          hasMore?: boolean;
-          nextCursor?: string;
-        }>,
-        callAgent(NEWS_METHODS.getBriefingHistory, { limit: 20 }) as Promise<{
-          briefings: BriefingRow[];
-        }>,
-      ]);
-      setOverview(nextOverview);
-      setInbox({
-        status: "ready",
-        articles: articleResult.articles,
-        hasMore: Boolean(articleResult.hasMore),
-        cursor: articleResult.nextCursor,
-      });
-      setBriefings(historyResult.briefings);
-    } catch (error) {
-      const message = errorMessage(error);
-      setInbox((current) => ({ ...current, status: "error", error: message }));
-      setNotice({
-        tone: "red",
-        text: `Could not update the reader: ${message}`,
-      });
-    }
-
-    const probe = modelProbe.current;
-    if (probe) {
+    if (refreshPending.current) return refreshPending.current;
+    const pending = withReaderData(async () => {
+      setInbox((current) =>
+        current.status === "idle" ? { ...current, status: "loading" } : current,
+      );
       try {
-        setModelConnect(
-          await detectMissingModelCredential(probe.catalog, probe.modelRef),
-        );
-      } catch {
-        /* keep the last known state */
+        const [nextOverview, articleResult, savedResult, historyResult] =
+          await Promise.all([
+            callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
+            refreshArticleWindow(
+              inboxRef.current.articles,
+              (cursor) =>
+                callAgent(NEWS_METHODS.listArticles, {
+                  limit: 40,
+                  triagedOnly: true,
+                  ...(cursor ? { cursor } : {}),
+                }) as Promise<{
+                  articles: ArticleRow[];
+                  hasMore?: boolean;
+                  nextCursor?: string;
+                }>,
+            ),
+            savedRef.current.status === "idle"
+              ? Promise.resolve(null)
+              : refreshArticleWindow(
+                  savedRef.current.articles,
+                  (cursor) =>
+                    callAgent(NEWS_METHODS.listArticles, {
+                      limit: 40,
+                      savedOnly: true,
+                      ...(cursor ? { cursor } : {}),
+                    }) as Promise<{
+                      articles: ArticleRow[];
+                      hasMore?: boolean;
+                      nextCursor?: string;
+                    }>,
+                ),
+            callAgent(NEWS_METHODS.getBriefingHistory, {
+              limit: 20,
+            }) as Promise<{
+              briefings: BriefingRow[];
+            }>,
+          ]);
+        setOverview(nextOverview);
+        setInbox({
+          status: "ready",
+          articles: articleResult.articles,
+          hasMore: Boolean(articleResult.hasMore),
+          cursor: articleResult.nextCursor,
+        });
+        if (savedResult)
+          setSaved({
+            status: "ready",
+            articles: savedResult.articles,
+            hasMore: Boolean(savedResult.hasMore),
+            cursor: savedResult.nextCursor,
+          });
+        setBriefings(historyResult.briefings);
+      } catch (error) {
+        const message = errorMessage(error);
+        setInbox((current) => ({
+          ...current,
+          status: "error",
+          error: message,
+        }));
+        setNotice({
+          tone: "red",
+          text: `Could not update the reader: ${message}`,
+        });
       }
+
+      const probe = modelProbe.current;
+      if (probe) {
+        try {
+          setModelConnect(
+            await detectMissingModelCredential(probe.catalog, probe.modelRef),
+          );
+        } catch {
+          /* keep the last known state */
+        }
+      }
+    });
+    refreshPending.current = pending;
+    try {
+      await pending;
+    } finally {
+      if (refreshPending.current === pending) refreshPending.current = null;
     }
-  }, [callAgent, channelName, participantId]);
+  }, [
+    callAgent,
+    channelName,
+    participantId,
+    withReaderData,
+    inboxRef,
+    savedRef,
+    setInbox,
+    setSaved,
+  ]);
   refreshRef.current = refresh;
 
   useEffect(() => {
@@ -538,41 +621,10 @@ export default function NewsPanel() {
 
   useEffect(() => {
     if (tab !== "saved" || !participantId) return;
-    let cancelled = false;
-    setSaved({ ...EMPTY_PAGE, status: "loading" });
-    void (
-      callAgent(NEWS_METHODS.listArticles, {
-        savedOnly: true,
-        limit: 40,
-      }) as Promise<{
-        articles: ArticleRow[];
-        hasMore?: boolean;
-        nextCursor?: string;
-      }>
-    ).then(
-      (result) => {
-        if (!cancelled)
-          setSaved({
-            status: "ready",
-            articles: result.articles,
-            hasMore: Boolean(result.hasMore),
-            cursor: result.nextCursor,
-          });
-      },
-      (error) => {
-        if (!cancelled)
-          setSaved({
-            status: "error",
-            articles: [],
-            hasMore: false,
-            error: errorMessage(error),
-          });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [callAgent, participantId, tab]);
+    if (savedRef.current.status === "idle")
+      setSaved({ ...EMPTY_PAGE, status: "loading" });
+    void refresh();
+  }, [participantId, refresh, savedRef, setSaved, tab]);
 
   useEffect(() => {
     const normalized = query.trim();
@@ -651,78 +703,87 @@ export default function NewsPanel() {
   const markRead = useCallback(
     (article: ArticleRow) => {
       if (article.read) return;
-      patchArticle(article.articleId, { read: true });
-      void callAgent(NEWS_METHODS.markRead, {
-        articleIds: [article.articleId],
+      void withReaderData(async () => {
+        await callAgent(NEWS_METHODS.markRead, {
+          articleIds: [article.articleId],
+        });
+        patchArticle(article.articleId, { read: true });
       }).catch((error) => {
-        patchArticle(article.articleId, { read: false });
         setNotice({
           tone: "red",
           text: `Could not mark this story read: ${errorMessage(error)}`,
         });
       });
     },
-    [callAgent, patchArticle],
+    [callAgent, patchArticle, withReaderData],
   );
 
+  const pendingSaved = useRef(new Set<string>());
+  const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(new Set());
   const setSavedState = useCallback(
     (article: ArticleRow, nextSaved: boolean) => {
-      patchArticle(article.articleId, { saved: nextSaved });
-      if (!nextSaved)
-        setSaved((current) => ({
-          ...current,
-          articles: current.articles.filter(
-            (item) => item.articleId !== article.articleId,
-          ),
-        }));
-      void callAgent(NEWS_METHODS.setSaved, {
-        articleId: article.articleId,
-        saved: nextSaved,
-      }).catch((error) => {
-        patchArticle(article.articleId, { saved: !nextSaved });
-        void refresh();
-        setNotice({
-          tone: "red",
-          text: `Could not update Saved: ${errorMessage(error)}`,
+      if (pendingSaved.current.has(article.articleId)) return;
+      pendingSaved.current.add(article.articleId);
+      setSavingIds(new Set(pendingSaved.current));
+      void withReaderData(async () => {
+        await callAgent(NEWS_METHODS.setSaved, {
+          articleId: article.articleId,
+          saved: nextSaved,
         });
-      });
+        patchArticle(article.articleId, { saved: nextSaved });
+        if (!nextSaved)
+          setSaved((current) => ({
+            ...current,
+            articles: current.articles.filter(
+              (item) => item.articleId !== article.articleId,
+            ),
+          }));
+        else if (savedRef.current.status !== "idle") void refresh();
+      })
+        .catch((error) => {
+          setNotice({
+            tone: "red",
+            text: `Could not update Saved: ${errorMessage(error)}`,
+          });
+        })
+        .finally(() => {
+          pendingSaved.current.delete(article.articleId);
+          setSavingIds(new Set(pendingSaved.current));
+        });
     },
-    [callAgent, patchArticle, refresh],
+    [callAgent, patchArticle, refresh, savedRef, setSaved, withReaderData],
   );
 
   const react = useCallback(
     (article: ArticleRow, reaction: "more" | "less" | "mute_source") => {
-      if (reaction !== "more") patchArticle(article.articleId, { read: true });
-      void callAgent(NEWS_METHODS.reactToStory, {
-        articleId: article.articleId,
-        reaction,
-      }).then(
-        (result) => {
-          const muted =
-            result && typeof result === "object"
-              ? (result as { muted?: string; feedDisabled?: boolean })
-              : null;
-          setNotice({
-            tone: "blue",
-            text:
-              reaction === "more"
-                ? "Got it — your future briefings will lean this way."
-                : reaction === "less"
-                  ? "Got it — you’ll see fewer stories like this."
-                  : muted?.feedDisabled
-                    ? `${muted.muted ?? article.source} is paused. You can restore it in Sources.`
-                    : `You’ll see less from ${article.source}.`,
-          });
-          void refresh();
-        },
-        (error) => {
-          if (reaction !== "more")
-            patchArticle(article.articleId, { read: article.read });
-          setNotice({ tone: "red", text: errorMessage(error) });
-        },
-      );
+      void withReaderData(async () => {
+        const result = await callAgent(NEWS_METHODS.reactToStory, {
+          articleId: article.articleId,
+          reaction,
+        });
+        if (reaction !== "more")
+          patchArticle(article.articleId, { read: true });
+        const muted =
+          result && typeof result === "object"
+            ? (result as { muted?: string; feedDisabled?: boolean })
+            : null;
+        setNotice({
+          tone: "blue",
+          text:
+            reaction === "more"
+              ? "Got it — your future briefings will lean this way."
+              : reaction === "less"
+                ? "Got it — you’ll see fewer stories like this."
+                : muted?.feedDisabled
+                  ? `${muted.muted ?? article.source} is paused. You can restore it in Sources.`
+                  : `You’ll see less from ${article.source}.`,
+        });
+        void refresh();
+      }).catch((error) => {
+        setNotice({ tone: "red", text: errorMessage(error) });
+      });
     },
-    [callAgent, patchArticle, refresh],
+    [callAgent, patchArticle, refresh, withReaderData],
   );
 
   const deepDive = useCallback(
@@ -841,23 +902,30 @@ export default function NewsPanel() {
   }, [modelConnect]);
 
   const loadMore = useCallback(async () => {
-    const target = tab === "saved" ? saved : inbox;
-    if (!target.cursor || !target.hasMore || activeAction) return;
+    if (activeAction) return;
     setActiveAction("load-more");
     try {
-      const result = (await callAgent(NEWS_METHODS.listArticles, {
-        limit: 40,
-        cursor: target.cursor,
-        ...(tab === "saved" ? { savedOnly: true } : { triagedOnly: true }),
-      })) as { articles: ArticleRow[]; hasMore?: boolean; nextCursor?: string };
-      const update = (current: ArticlePage): ArticlePage => ({
-        status: "ready",
-        articles: [...current.articles, ...result.articles],
-        hasMore: Boolean(result.hasMore),
-        cursor: result.nextCursor,
+      await withReaderData(async () => {
+        const target = tab === "saved" ? savedRef.current : inboxRef.current;
+        if (!target.cursor || !target.hasMore) return;
+        const result = (await callAgent(NEWS_METHODS.listArticles, {
+          limit: 40,
+          cursor: target.cursor,
+          ...(tab === "saved" ? { savedOnly: true } : { triagedOnly: true }),
+        })) as {
+          articles: ArticleRow[];
+          hasMore?: boolean;
+          nextCursor?: string;
+        };
+        const update = (current: ArticlePage): ArticlePage => ({
+          status: "ready",
+          articles: [...current.articles, ...result.articles],
+          hasMore: Boolean(result.hasMore),
+          cursor: result.nextCursor,
+        });
+        if (tab === "saved") setSaved(update);
+        else setInbox(update);
       });
-      if (tab === "saved") setSaved(update);
-      else setInbox(update);
     } catch (error) {
       setNotice({
         tone: "red",
@@ -866,7 +934,16 @@ export default function NewsPanel() {
     } finally {
       setActiveAction(null);
     }
-  }, [activeAction, callAgent, inbox, saved, tab]);
+  }, [
+    activeAction,
+    callAgent,
+    inboxRef,
+    savedRef,
+    setInbox,
+    setSaved,
+    tab,
+    withReaderData,
+  ]);
 
   const searching = query.trim().length > 0;
   const activePage = tab === "saved" ? saved : inbox;
@@ -911,18 +988,22 @@ export default function NewsPanel() {
     return result;
   }, [clusters]);
 
-  useEffect(() => setSelectedIndex(0), [inboxView, query, source, tab]);
-  useEffect(
-    () =>
-      setSelectedIndex((index) =>
-        Math.min(index, Math.max(0, grouped.length - 1)),
-      ),
-    [grouped.length],
+  useEffect(() => setSelectedArticleId(null), [inboxView, query, source, tab]);
+
+  const selectedIndex = Math.max(
+    0,
+    grouped.findIndex(
+      ({ cluster }) =>
+        cluster.primary.articleId === selectedArticleId ||
+        cluster.others.some(
+          (article) => article.articleId === selectedArticleId,
+        ),
+    ),
   );
 
-  const handleReaderKeyDown = (event: React.KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
-      return;
+  const handleReaderKeyDown = (
+    event: import("react").KeyboardEvent<HTMLElement>,
+  ) => {
     const target = event.target as HTMLElement;
     if (
       target.closest(
@@ -933,9 +1014,14 @@ export default function NewsPanel() {
     const current = grouped[selectedIndex]?.cluster.primary;
     if (!current) return;
     if (event.key === "j")
-      setSelectedIndex((value) => Math.min(value + 1, grouped.length - 1));
+      setSelectedArticleId(
+        grouped[Math.min(selectedIndex + 1, grouped.length - 1)]!.cluster
+          .primary.articleId,
+      );
     else if (event.key === "k")
-      setSelectedIndex((value) => Math.max(value - 1, 0));
+      setSelectedArticleId(
+        grouped[Math.max(selectedIndex - 1, 0)]!.cluster.primary.articleId,
+      );
     else if (event.key === "o") {
       window.open(current.url, "_blank", "noopener");
       markRead(current);
@@ -1081,6 +1167,7 @@ export default function NewsPanel() {
                     <Button
                       size="2"
                       variant="soft"
+                      aria-label="Update news"
                       disabled={Boolean(activeAction) || !participantId}
                       onClick={() =>
                         settle(perform(NEWS_METHODS.refreshNow, {}))
@@ -1095,6 +1182,7 @@ export default function NewsPanel() {
                     </Button>
                     <Button
                       size="2"
+                      aria-label="Brief me"
                       disabled={Boolean(activeAction) || !participantId}
                       onClick={() =>
                         settle(
@@ -1140,9 +1228,9 @@ export default function NewsPanel() {
                         role={notice.tone === "red" ? "alert" : "status"}
                       >
                         <Callout.Text>
-                          <Flex align="center" gap="2">
+                          <span className="news-notice-content">
                             <Text size="2">{notice.text}</Text>
-                            <Box flexGrow="1" />
+                            <span style={{ flexGrow: 1 }} />
                             <IconButton
                               size="1"
                               variant="ghost"
@@ -1151,7 +1239,7 @@ export default function NewsPanel() {
                             >
                               <Cross2Icon />
                             </IconButton>
-                          </Flex>
+                          </span>
                         </Callout.Text>
                       </Callout.Root>
                     ) : null}
@@ -1171,7 +1259,7 @@ export default function NewsPanel() {
                           <ExclamationTriangleIcon />
                         </Callout.Icon>
                         <Callout.Text>
-                          <Flex align="center" gap="3" wrap="wrap">
+                          <span className="news-notice-content">
                             <Text size="2">
                               Connect {modelConnect.providerId} to create
                               briefings and explore stories.
@@ -1183,14 +1271,14 @@ export default function NewsPanel() {
                             >
                               {connectingModel ? <Spinner /> : null} Connect
                             </Button>
-                          </Flex>
+                          </span>
                         </Callout.Text>
                       </Callout.Root>
                     ) : null}
                     {triageError ? (
                       <Callout.Root color="red" size="1">
                         <Callout.Text>
-                          <Flex align="center" gap="2" wrap="wrap">
+                          <span className="news-notice-content">
                             <Text size="2">
                               Organizing paused: {triageError}
                             </Text>
@@ -1211,7 +1299,7 @@ export default function NewsPanel() {
                             >
                               Retry
                             </Button>
-                          </Flex>
+                          </span>
                         </Callout.Text>
                       </Callout.Root>
                     ) : null}
@@ -1402,6 +1490,7 @@ export default function NewsPanel() {
                             rows={grouped}
                             selectedIndex={selectedIndex}
                             busy={Boolean(activeAction)}
+                            savingIds={savingIds}
                             previousVisit={previousVisit.current}
                             onOpen={markRead}
                             onSave={setSavedState}
@@ -1468,6 +1557,7 @@ export default function NewsPanel() {
                         rows={grouped}
                         selectedIndex={selectedIndex}
                         busy={Boolean(activeAction)}
+                        savingIds={savingIds}
                         previousVisit={previousVisit.current}
                         onOpen={markRead}
                         onSave={setSavedState}
@@ -1595,6 +1685,7 @@ function EmptyState({
 function ArticleList({
   rows,
   selectedIndex,
+  savingIds,
   busy,
   previousVisit,
   onOpen,
@@ -1609,6 +1700,7 @@ function ArticleList({
     starts: boolean;
   }>;
   selectedIndex: number;
+  savingIds: ReadonlySet<string>;
   busy: boolean;
   previousVisit: number;
   onOpen: (article: ArticleRow) => void;
@@ -1648,6 +1740,7 @@ function ArticleList({
               selected={index === selectedIndex}
               fresh={fresh}
               disabled={busy}
+              saving={savingIds.has(article.articleId)}
               onOpen={() => onOpen(article)}
               onSave={(saved) => onSave(article, saved)}
               onDeepDive={() => void onDeepDive(article)}

@@ -6,6 +6,10 @@ import type { Fetcher } from "@workspace/feeds";
 import { articleId } from "@workspace/feeds";
 import type { NewsBriefingCardState } from "@workspace/feeds/card-types";
 
+import type {
+  AgentInitiatedTurnOptions,
+  AgentTurnClosedInput,
+} from "@workspace/agentic-do";
 import { NewsAgentWorker } from "./news-agent-worker.js";
 import { NEWS_MESSAGE_TYPES } from "./cards.js";
 import { ARTICLE_RETENTION_MS } from "./types.js";
@@ -34,7 +38,11 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   }> = [];
   signals: Array<{ participantId: string; content: string; type?: string }> =
     [];
-  agentInitiatedTurns: Array<{ channelId: string; content: string }> = [];
+  agentInitiatedTurns: Array<{
+    channelId: string;
+    content: string;
+    options?: AgentInitiatedTurnOptions;
+  }> = [];
   /** url → ordered list of responses; last one repeats. */
   feedResponses = new Map<
     string,
@@ -182,8 +190,17 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   protected override async submitAgentInitiatedTurn(
     channelId: string,
     input: { content?: string },
+    options?: AgentInitiatedTurnOptions,
   ): Promise<void> {
-    this.agentInitiatedTurns.push({ channelId, content: input.content ?? "" });
+    this.agentInitiatedTurns.push({
+      channelId,
+      content: input.content ?? "",
+      options,
+    });
+  }
+
+  closeBriefingTurn(input: AgentTurnClosedInput) {
+    return this.onTurnClosed(input);
   }
 
   protected override createChannelClient() {
@@ -987,7 +1004,7 @@ describe("NewsAgentWorker", () => {
     ).toMatchObject({ triaged: 5, remaining: 0, continued: false });
   });
 
-  it("an ordinary refresh marks stuck briefings as failed", async () => {
+  it("a slow briefing stays pending until its exact owning turn ends", async () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
@@ -996,19 +1013,82 @@ describe("NewsAgentWorker", () => {
     await addExampleFeed(worker, [
       { title: "A", link: "https://example.com/a" },
     ]);
-
-    // Stuck briefing from 31 minutes ago flips to error on the next poll.
-    worker.execSqlForTest(
-      `INSERT INTO news_briefings (channel_id, briefing_id, created_at, status, story_ids_json)
-       VALUES ('ch-1', 'stuck', ?, 'summarizing', '[]')`,
-      worker.clock - 31 * 60_000,
+    await worker.refreshNow("ch-1", { briefing: true });
+    const briefingId = String(
+      worker.rowsForTest(
+        "SELECT briefing_id FROM news_briefings ORDER BY created_at DESC",
+      )[0]!["briefing_id"],
     );
+    const binding = worker.rowsForTest(
+      "SELECT key FROM state WHERE value = ? AND key LIKE 'news:briefing-turn:%'",
+      briefingId,
+    )[0]!;
+    const [, turnId] = JSON.parse(
+      String(binding["key"]).slice("news:briefing-turn:".length),
+    ) as string[];
+    worker.clock += 31 * 60_000;
     await worker.refreshNow("ch-1", {});
+    const closed = {
+      channelId: "ch-1",
+      turnId: turnId!,
+      metadata: {},
+      reason: "work_failed",
+      effectFailures: [
+        {
+          invocationId: "inv-1",
+          name: "fetch",
+          outcome: "infrastructure_error" as const,
+          code: "disconnected",
+          message: "Provider disconnected",
+        },
+      ],
+    };
+    await worker.closeBriefingTurn({ ...closed, turnId: "unrelated-turn" });
     expect(
       worker.rowsForTest(
-        `SELECT status FROM news_briefings WHERE briefing_id = 'stuck'`,
+        "SELECT status FROM news_briefings WHERE briefing_id = ?",
+        briefingId,
+      )[0]!["status"],
+    ).toBe("summarizing");
+    await worker.closeBriefingTurn(closed);
+    expect(
+      worker.rowsForTest(
+        "SELECT status FROM news_briefings WHERE briefing_id = ?",
+        briefingId,
       )[0]!["status"],
     ).toBe("error");
+    expect(await worker.briefingHistory("ch-1", {})).toMatchObject({
+      briefings: [
+        expect.objectContaining({ lastError: "Provider disconnected" }),
+      ],
+    });
+    expect(
+      await worker.publishBriefing("ch-1", { briefingId, tldr: "Late result" }),
+    ).toMatchObject({ error: expect.stringContaining("cannot be published") });
+  });
+
+  it("reports failed sources without advancing the successful refresh time", async () => {
+    const worker = await makeWorker();
+    await worker.subscribeChannel({
+      channelId: "ch-1",
+      contextId: "ctx-1",
+    } as never);
+    await addExampleFeed(worker, [
+      { title: "A", link: "https://example.com/a" },
+    ]);
+    await worker.refreshNow("ch-1", {});
+    const prior = (await worker.getOverview("ch-1", {})) as {
+      setup: { lastRunAt?: string };
+    };
+    worker.clock += 60_000;
+    worker.feedResponses.set(FEED_URL, [{ status: 500 }]);
+    await worker.refreshNow("ch-1", {});
+    expect(await worker.getOverview("ch-1", {})).toMatchObject({
+      setup: {
+        lastRunAt: prior.setup.lastRunAt,
+        lastError: expect.stringContaining("1 feed could not refresh"),
+      },
+    });
   });
 
   it("importOpml bulk-adds the feeds it can validate", async () => {

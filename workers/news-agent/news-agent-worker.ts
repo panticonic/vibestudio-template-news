@@ -1,9 +1,11 @@
+import { ids } from "@workspace/agent-loop";
 import {
   AgentWorkerBase,
   installMessageTypes,
   type ClonedChannelContext,
   type AgentToolExecutionContext,
   type RespondPolicy,
+  type AgentTurnClosedInput,
 } from "@workspace/agentic-do";
 import type { DurableObjectContext } from "@workspace/runtime/worker";
 import type { ActorRef } from "@workspace/agentic-protocol";
@@ -27,7 +29,6 @@ import {
 
 import { createNewsTables } from "./schema.js";
 import {
-  BRIEFING_WATCHDOG_MS,
   DEFAULT_BRIEFING_INTERVAL_MS,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_TOP_K,
@@ -411,40 +412,84 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   ): Promise<void> {
     const state = this.getChannelState(channelId);
     try {
-      await this.syncEngine.pollChannel(channelId, opts);
-      state.lastRunAt = this.now();
-      state.lastError = undefined;
+      const result = await this.syncEngine.pollChannel(channelId, opts);
+      // Skipped feeds retain their own failure state. A no-op poll cannot
+      // declare recovery from a failure or advance the successful-sync time.
+      if (result.feedsPolled > result.feedsFailed) state.lastRunAt = this.now();
+      const failed = this.sql
+        .exec(
+          "SELECT COUNT(*) AS count FROM news_feeds WHERE channel_id = ? AND enabled = 1 AND fail_count > 0",
+          channelId,
+        )
+        .toArray()[0];
+      const count = Number(failed?.["count"] ?? 0);
+      state.lastError =
+        count > 0
+          ? `${count} ${count === 1 ? "feed could" : "feeds could"} not refresh. Open Sources for the failure details.`
+          : undefined;
     } catch (err) {
       state.lastError = err instanceof Error ? err.message : String(err);
     }
     this.saveChannelState(state);
-    this.watchdogStuckBriefings(channelId);
     await this.publishSetupCard(channelId);
   }
 
-  /** Flip briefings stuck in "summarizing" (e.g. dead harness turn) to error. */
-  private watchdogStuckBriefings(channelId: string): void {
-    const cutoff = this.now() - BRIEFING_WATCHDOG_MS;
-    const stuck = this.sql
+  private briefingErrorKey(channelId: string, briefingId: string): string {
+    return `news:briefing-error:${JSON.stringify([channelId, briefingId])}`;
+  }
+
+  private async failBriefing(
+    channelId: string,
+    briefingId: string,
+    message: string,
+  ): Promise<void> {
+    const pending = this.sql
       .exec(
-        `SELECT briefing_id FROM news_briefings
-         WHERE channel_id = ? AND status = 'summarizing' AND created_at < ?`,
+        "SELECT status FROM news_briefings WHERE channel_id = ? AND briefing_id = ?",
         channelId,
-        cutoff,
+        briefingId,
       )
-      .toArray();
-    for (const row of stuck) {
-      const briefingId = String(row["briefing_id"]);
+      .toArray()[0];
+    if (pending?.["status"] === "error") {
+      await this.updateBriefingCard(channelId, briefingId, {
+        status: "error",
+        lastError:
+          this.getStateValue(this.briefingErrorKey(channelId, briefingId)) ??
+          message,
+      });
+      return;
+    }
+    if (pending?.["status"] !== "summarizing") return;
+    this.ctx.storage.transactionSync(() => {
       this.sql.exec(
-        `UPDATE news_briefings SET status = 'error' WHERE channel_id = ? AND briefing_id = ?`,
+        "UPDATE news_briefings SET status = 'error' WHERE channel_id = ? AND briefing_id = ?",
         channelId,
         briefingId,
       );
-      void this.updateBriefingCard(channelId, briefingId, {
-        status: "error",
-        lastError: "briefing run did not complete",
-      });
-    }
+      this.setStateValue(this.briefingErrorKey(channelId, briefingId), message);
+    });
+    await this.updateBriefingCard(channelId, briefingId, {
+      status: "error",
+      lastError: message,
+    });
+  }
+
+  protected override async onTurnClosed(
+    input: AgentTurnClosedInput,
+  ): Promise<void> {
+    await super.onTurnClosed(input);
+    const briefingId = this.getStateValue(
+      `news:briefing-turn:${JSON.stringify([input.channelId, input.turnId])}`,
+    );
+    if (!briefingId) return;
+    const detail = input.finalMessage || input.summary;
+    const message =
+      input.effectFailures
+        .map((failure) => failure.message)
+        .filter(Boolean)
+        .join("\n") ||
+      `Briefing turn ended (${input.reason ?? "completed"}) without publishing a briefing.${detail ? ` ${detail}` : ""}`;
+    await this.failBriefing(input.channelId, briefingId, message);
   }
 
   // ── Tier 2: briefing ──────────────────────────────────────────────────────
@@ -475,7 +520,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       articleCountScanned: scanned,
       newSinceLastRun: scanned,
     };
-    await this.newsCards.createBriefing(channelId, card);
     // notify defaults on (scheduled/cold-start runs); a manual "Brief me now"
     // passes notify:false so it stays silent for a reader already watching.
     const notify = opts?.notify === false ? 0 : 1;
@@ -488,8 +532,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       JSON.stringify(stories.map((story) => story.articleId)),
       notify,
     );
+    const steeringId = `news-briefing:${channelId}:${briefingId}`;
+    const turnId = ids.turnId(channelId, steeringId, this.participantId());
+    this.setStateValue(
+      `news:briefing-turn:${JSON.stringify([channelId, turnId])}`,
+      briefingId,
+    );
     const previousTldr = this.previousTldr(channelId, briefingId);
     try {
+      await this.newsCards.createBriefing(channelId, card);
       await this.submitAgentInitiatedTurn(
         channelId,
         {
@@ -504,21 +555,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
             articleCountScanned: scanned,
           }),
         },
-        { steeringId: `news-briefing:${channelId}:${briefingId}` },
+        { steeringId },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.sql.exec(
-        `UPDATE news_briefings SET status = 'error' WHERE channel_id = ? AND briefing_id = ?`,
+      await this.failBriefing(
         channelId,
         briefingId,
+        `Briefing could not start: ${message}`,
       );
-      state.lastError = `Briefing could not start: ${message}`;
-      this.saveChannelState(state);
-      await this.updateBriefingCard(channelId, briefingId, {
-        status: "error",
-        lastError: state.lastError,
-      });
       throw err;
     }
   }
@@ -636,6 +681,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       createdAt: new Date(Number(row["created_at"])).toISOString(),
       status: String(row["status"]) as NewsBriefingCardState["status"],
       tldr: (row["tldr"] as string | null) ?? undefined,
+      lastError:
+        this.getStateValue(this.briefingErrorKey(channelId, briefingId)) ??
+        undefined,
       stories: this.storiesByIds(channelId, storyIds),
       articleCountScanned: storyIds.length,
       newSinceLastRun: 0,
@@ -1364,6 +1412,16 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const sourcesRead = numberArg(args, "sourcesRead");
     const briefing = this.briefingState(channelId, briefingId);
     if (!briefing) return { error: `unknown briefing: ${briefingId}` };
+    if (briefing.status === "ready")
+      return {
+        published: briefingId,
+        storyCount: briefing.stories.length,
+        at: briefing.createdAt,
+      };
+    if (briefing.status !== "summarizing")
+      return {
+        error: `Briefing ${briefingId} is ${briefing.status} and cannot be published.`,
+      };
 
     const blurbs = new Map<string, string>();
     for (const entry of Array.isArray(args["storyBlurbs"])
@@ -1440,14 +1498,18 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     }
 
     const now = this.now();
-    this.sql.exec(
-      `UPDATE news_briefings SET status = 'ready', tldr = ?, story_ids_json = ?, sources_read = ? WHERE channel_id = ? AND briefing_id = ?`,
-      tldr,
-      JSON.stringify(kept.map((story) => story.articleId)),
-      sourcesRead ?? null,
-      channelId,
-      briefingId,
-    );
+    const committed = this.sql
+      .exec(
+        `UPDATE news_briefings SET status = 'ready', tldr = ?, story_ids_json = ?, sources_read = ? WHERE channel_id = ? AND briefing_id = ? AND status = 'summarizing' RETURNING briefing_id`,
+        tldr,
+        JSON.stringify(kept.map((story) => story.articleId)),
+        sourcesRead ?? null,
+        channelId,
+        briefingId,
+      )
+      .toArray();
+    if (committed.length === 0)
+      return { error: `Briefing ${briefingId} ended before publication.` };
     for (const story of kept) {
       this.sql.exec(
         `UPDATE news_articles SET briefed_in = ?, blurb = COALESCE(?, blurb), triaged = 1 WHERE channel_id = ? AND article_id = ?`,
@@ -1568,7 +1630,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         limit,
       )
       .toArray();
-    const channelError = this.getChannelState(channelId).lastError;
     return {
       briefings: rows.map((row) => ({
         briefingId: String(row["briefing_id"]),
@@ -1581,8 +1642,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
             : Number(row["sources_read"]),
         lastError:
           String(row["status"]) === "error"
-            ? (channelError ??
-              "This briefing did not complete. Try creating it again.")
+            ? (this.getStateValue(
+                this.briefingErrorKey(channelId, String(row["briefing_id"])),
+              ) ?? "This briefing did not complete. Try creating it again.")
             : undefined,
       })),
     };
