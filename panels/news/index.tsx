@@ -1117,10 +1117,23 @@ export default function NewsPanel() {
             gap="2"
             style={{ height: "100dvh" }}
           >
-            <Spinner />
-            <Text size="2" color="gray">
-              Opening your reader…
-            </Text>
+            {bootstrapStatus === "error" ? (
+              <OperationNotice
+                intent="error"
+                actions={
+                  <Button onClick={retryBootstrap}>Retry startup</Button>
+                }
+              >
+                {notice?.text}
+              </OperationNotice>
+            ) : (
+              <>
+                <Spinner />
+                <Text size="2" color="gray">
+                  Opening your reader…
+                </Text>
+              </>
+            )}
           </Flex>
         </Theme>
       </ErrorBoundary>
