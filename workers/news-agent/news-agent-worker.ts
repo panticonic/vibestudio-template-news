@@ -1,16 +1,23 @@
-import { ids } from "@workspace/agent-loop";
+import { Type } from "@panticonic/pi-ai";
+import { copyJson, type Context } from "@panticonic/pi-chord";
+import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
+import type {
+  ToolRegistration,
+  SettledSubmissionRecord,
+} from "@panticonic/pi-durable";
+import type { AgentProductMetadata } from "@workspace/agentic-core/agent-product-metadata";
+import { withRpcAbortSignal, type RpcClient } from "@vibestudio/rpc";
+import { createRpcFs } from "@workspace/runtime/worker/rpc-fs";
 import {
   AgentWorkerBase,
   installMessageTypes,
   type ClonedChannelContext,
-  type AgentToolExecutionContext,
   type RespondPolicy,
-  type AgentTurnClosedInput,
+  CardManager,
 } from "@workspace/agentic-do";
 import type { DurableObjectContext } from "@workspace/runtime/worker";
 import type { ActorRef } from "@workspace/agentic-protocol";
 import type { ParticipantDescriptor } from "@workspace/harness";
-import type { AgentTool } from "@workspace/pi-core";
 import {
   articleId as canonicalArticleId,
   discoverFeedUrl,
@@ -59,7 +66,7 @@ import {
   toolOperations,
   type NewsHandlers,
   type NewsOperation,
-  type NewsOperationContext,
+  type NewsEffects,
 } from "./operations.js";
 import {
   NEWS_ANALYST_PROMPT,
@@ -69,10 +76,8 @@ import {
   buildTriagePrompt,
 } from "./prompts.js";
 
-type NewsTool = AgentTool;
-
 const DAY_MS = 24 * 3_600_000;
-const NEWS_BASE_LOOP_TOOL_NAMES = new Set([
+const NEWS_BASE_TOOL_NAMES = new Set([
   "suspend_turn",
   "ask_user",
   "web_search",
@@ -95,7 +100,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private readonly syncEngine: NewsSyncEngine;
   private readonly newsCards: NewsCards;
   private readonly operationIndex: Map<string, NewsOperation>;
-  private readonly operationContext: NewsOperationContext;
   private recoveredChannels = new Set<string>();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -109,7 +113,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     });
     this.newsCards = new NewsCards(this.cards);
     this.operationIndex = buildOperationIndex();
-    this.operationContext = { handlers: this };
   }
 
   /** Injectable clock for tests. */
@@ -127,8 +130,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  protected override createTables(): void {
-    super.createTables();
+  protected override async createAgentTables(): Promise<void> {
+    await super.createAgentTables();
     createNewsTables(this.sql);
   }
 
@@ -286,36 +289,67 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       : NEWS_SYSTEM_PROMPT;
   }
 
-  protected override async getLoopTools(
+  private boundNewsEffects(rpc: RpcClient, context: Context): NewsEffects {
+    const cards = new CardManager({
+      sql: this.sql,
+      createChannelClient: (id) => this.createChannelClient(id, rpc),
+      getParticipantId: (id) => this.subscriptions.getParticipantId(id),
+      getActor: () => ({ kind: "agent", id: this.participantId() }),
+      getAgentId: () => this.objectKey,
+    });
+    const fetcher = this.feedFetcher() ?? fetch;
+    return {
+      cards: new NewsCards(cards),
+      manager: cards,
+      rpc,
+      fetcher: async (url, init) => {
+        const signal = context.abortSignal;
+        signal?.throwIfAborted();
+        try {
+          return await fetcher(url, {
+            ...init,
+            signal:
+              signal && init?.signal
+                ? AbortSignal.any([signal, init.signal])
+                : (signal ?? init?.signal),
+          });
+        } catch (error) {
+          signal?.throwIfAborted();
+          throw error;
+        }
+      },
+      signal: context.abortSignal,
+    };
+  }
+
+  protected override async getTools(
     channelId: string,
-    execution?: AgentToolExecutionContext,
-  ): Promise<AgentTool[]> {
-    const baseTools = (await super.getLoopTools(channelId, execution)).filter(
-      (tool) => NEWS_BASE_LOOP_TOOL_NAMES.has(tool.name),
+  ): Promise<ToolRegistration[]> {
+    const baseTools = (await super.getTools(channelId)).filter((tool) =>
+      NEWS_BASE_TOOL_NAMES.has(tool.name),
     );
-    const newsTools = toolOperations().map(
-      (op) =>
-        ({
-          name: op.name,
-          label: op.name,
-          description: op.description,
-          parameters: op.schema,
-          execute: async (_toolCallId: string, params: unknown) => {
-            if (op.needsRecovery) await this.ensureRecovered(channelId);
-            const details = await op.run(
-              this.operationContext,
-              channelId,
-              record(params),
-            );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(details, null, 2) },
-              ],
-              details,
-            };
-          },
-        }) as NewsTool,
-    );
+    const newsTools: ToolRegistration[] = toolOperations().map((op) => ({
+      name: op.name,
+      version: 1,
+      description: op.description,
+      parameters: Type.Unsafe<Record<string, unknown>>(op.schema),
+      executionData: { channelId },
+      execute: async (args, api, context) => {
+        if (record(api.executionData)["channelId"] !== channelId)
+          throw new Error("News tool changed its original channel binding");
+        const execution = await this.bindNativeToolExecution(api, context);
+        const effects = this.boundNewsEffects(execution.rpc, context);
+        if (op.needsRecovery) await this.ensureRecovered(channelId, effects);
+        const details = copyJson(
+          await op.run({ handlers: this, effects }, channelId, record(args)),
+          { omitUndefinedProperties: true },
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+          details,
+        };
+      },
+    }));
     return [...baseTools, ...newsTools];
   }
 
@@ -335,47 +369,42 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
-  override async subscribeChannel(
-    opts: Parameters<AgentWorkerBase["subscribeChannel"]>[0],
-  ): Promise<{ ok: boolean; participantId: string }> {
-    const result = await super.subscribeChannel(opts);
-    this.ensureChannelState(opts.channelId);
-    // Register card types on the (new) channel so inherited/own cards render.
-    await this.installChannelUi(opts.channelId);
-    // Deep-dive analyst forks are focused analysis threads: no feed polling or
-    // setup card. startDeepDive seeds their opening turn explicitly.
-    if (this.getMode(opts.channelId) === "analyst") return result;
-    await this.publishSetupCard(opts.channelId);
-    return result;
+  protected override async prepareNativeChannelProduct(
+    channelId: string,
+    configuration: unknown,
+    fork: ClonedChannelContext | null,
+    context: Context,
+  ): Promise<void> {
+    await super.prepareNativeChannelProduct(
+      channelId,
+      configuration,
+      fork,
+      context,
+    );
+    const effects = this.boundNewsEffects(
+      context.abortSignal
+        ? withRpcAbortSignal(this.rpc, context.abortSignal)
+        : this.rpc,
+      context,
+    );
+    this.ensureChannelState(channelId);
+    await this.installChannelUi(channelId, effects);
+    if (this.getMode(channelId) !== "analyst")
+      await this.publishSetupCard(channelId, effects);
   }
 
   // ── deep-dive forks ─────────────────────────────────────────────────────────
 
-  /** A clone copies the parent DO's SQLite wholesale. Strip the parent
-   *  channel's curator state/jobs (the clone never holds its subscription) and
-   *  pre-mark the forked channel as an analyst thread, so the subscribe the
-   *  base runs next skips feed polling and the setup card. */
+  /** A knowledge fork starts with fresh execution and curator storage.
+   * Mark its new channel as an analyst thread before subscription setup. */
   protected override async onChannelForked(
     ctx: ClonedChannelContext,
   ): Promise<void> {
-    this.dropChannelData(ctx.oldChannelId);
     this.setChannelMode(ctx.newChannelId, "analyst");
   }
 
-  private dropChannelData(channelId: string): void {
-    for (const table of [
-      "news_channel_state",
-      "news_feeds",
-      "news_topics",
-      "news_articles",
-      "news_briefings",
-    ]) {
-      this.sql.exec(`DELETE FROM ${table} WHERE channel_id = ?`, channelId);
-    }
-  }
-
   /** Seed a forked deep-dive channel's opening analyst turn. The panel calls
-   *  this on the freshly-cloned agent after fork(); idempotent via steeringId. */
+   *  this on the fresh agent after fork(); idempotent via steeringId. */
   async startDeepDive(
     channelId: string,
     args: Record<string, unknown>,
@@ -474,22 +503,27 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     });
   }
 
-  protected override async onTurnClosed(
-    input: AgentTurnClosedInput,
+  protected override async onNativeInputSettled(
+    channelId: string,
+    submission: SettledSubmissionRecord,
+    metadata: AgentProductMetadata | undefined,
+    context: Context,
   ): Promise<void> {
-    await super.onTurnClosed(input);
-    const briefingId = this.getStateValue(
-      `news:briefing-turn:${JSON.stringify([input.channelId, input.turnId])}`,
-    );
-    if (!briefingId) return;
-    const detail = input.finalMessage || input.summary;
+    await super.onNativeInputSettled(channelId, submission, metadata, context);
+    if (metadata?.domain?.kind !== "news.briefing") return;
+    const briefingId = stringArg(record(metadata.domain.data), "briefingId");
+    if (!briefingId)
+      throw new Error("News briefing input has no original briefing binding");
+    const detail =
+      submission.status === "unanswered" ? submission.detail : undefined;
+    const original =
+      typeof detail === "string"
+        ? detail
+        : stringArg(record(detail), "message");
     const message =
-      input.effectFailures
-        .map((failure) => failure.message)
-        .filter(Boolean)
-        .join("\n") ||
-      `Briefing turn ended (${input.reason ?? "completed"}) without publishing a briefing.${detail ? ` ${detail}` : ""}`;
-    await this.failBriefing(input.channelId, briefingId, message);
+      original ||
+      `Briefing input ended (${submission.status === "unanswered" ? submission.reason : "answered"}) without publishing a briefing.`;
+    await this.failBriefing(channelId, briefingId, message);
   }
 
   // ── Tier 2: briefing ──────────────────────────────────────────────────────
@@ -533,11 +567,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       notify,
     );
     const steeringId = `news-briefing:${channelId}:${briefingId}`;
-    const turnId = ids.turnId(channelId, steeringId, this.participantId());
-    this.setStateValue(
-      `news:briefing-turn:${JSON.stringify([channelId, turnId])}`,
-      briefingId,
-    );
     const previousTldr = this.previousTldr(channelId, briefingId);
     try {
       await this.newsCards.createBriefing(channelId, card);
@@ -555,7 +584,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
             articleCountScanned: scanned,
           }),
         },
-        { steeringId },
+        { steeringId, domain: { kind: "news.briefing", data: { briefingId } } },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -792,7 +821,10 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     };
   }
 
-  private async publishSetupCard(channelId: string): Promise<void> {
+  private async publishSetupCard(
+    channelId: string,
+    effects?: NewsEffects,
+  ): Promise<void> {
     const payload = this.buildSetupCardState(channelId);
     const state = this.getChannelState(channelId);
     // Dedup on the meaningful fields only. `lastRunAt` ticks on every poll but
@@ -801,7 +833,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const { lastRunAt: _lastRunAt, ...stable } = payload;
     const signature = JSON.stringify(stable);
     if (state.lastSetupJson === signature) return;
-    await this.newsCards.publishSetup(channelId, payload);
+    await (effects?.cards ?? this.newsCards).publishSetup(channelId, payload);
     state.lastSetupJson = signature;
     this.saveChannelState(state);
   }
@@ -837,42 +869,45 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     };
   }
 
-  private async installChannelUi(channelId: string): Promise<void> {
+  private async installChannelUi(
+    channelId: string,
+    effects: NewsEffects,
+  ): Promise<void> {
+    const fs = createRpcFs(effects.rpc);
     await installMessageTypes({
-      channel: this.createChannelClient(channelId),
+      channel: this.createChannelClient(channelId, effects.rpc),
       actor: this.localActor(channelId),
       specs: NEWS_MESSAGE_TYPES,
       imports: NEWS_UI_IMPORTS,
       version: NEWS_UI_INSTALL_VERSION,
       keyPrefix: "news",
-      cards: this.cards,
+      cards: effects.manager,
       channelId,
       readFile: async (path) => {
-        try {
-          const raw = await this.fs.readFile(path, "utf8");
-          return typeof raw === "string"
-            ? raw
-            : raw instanceof Uint8Array
-              ? new TextDecoder().decode(raw)
-              : null;
-        } catch {
-          return null;
-        }
+        const raw = await fs.readFile(path, "utf8");
+        return typeof raw === "string"
+          ? raw
+          : raw instanceof Uint8Array
+            ? new TextDecoder().decode(raw)
+            : null;
       },
     });
   }
 
-  private async ensureRecovered(channelId: string): Promise<void> {
+  private async ensureRecovered(
+    channelId: string,
+    effects?: NewsEffects,
+  ): Promise<void> {
     if (this.recoveredChannels.has(channelId)) return;
-    this.recoveredChannels.add(channelId);
     const folded = await this.indexOwnCustomMessages(
       channelId,
       () => undefined,
+      effects?.rpc ?? this.rpc,
     );
     const setup = folded.get("news.setup");
     if (setup && setup.size > 0) {
       const messageId = [...setup.keys()][0]!;
-      this.newsCards.adoptRecoveredCard(
+      (effects?.cards ?? this.newsCards).adoptRecoveredCard(
         channelId,
         SETUP_CARD_KEY,
         "news.setup",
@@ -882,56 +917,58 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     for (const [messageId, value] of folded.get("news.briefing") ?? []) {
       const briefingId = stringArg(record(value), "briefingId");
       if (!briefingId) continue;
-      this.newsCards.adoptRecoveredCard(
+      (effects?.cards ?? this.newsCards).adoptRecoveredCard(
         channelId,
         briefingCardKey(briefingId),
         "news.briefing",
         messageId,
       );
     }
+    this.recoveredChannels.add(channelId);
   }
 
   // ── method dispatch ───────────────────────────────────────────────────────
 
-  override async onMethodCall(
+  protected override async handleAgentMethodCall(
     channelId: string,
-    _transportCallId: string,
     methodName: string,
     args: unknown,
+    signal: AbortSignal,
+    transportCallId: string,
   ): Promise<{ result: unknown; isError?: boolean }> {
-    try {
-      const standardResult = await this.handleStandardAgentMethodCall(
-        channelId,
-        methodName,
-        args,
-      );
-      if (standardResult) return standardResult;
+    const standardResult = await this.handleStandardAgentMethodCall(
+      channelId,
+      methodName,
+      args,
+      signal,
+      transportCallId,
+    );
+    if (standardResult) return standardResult;
 
-      const op = this.operationIndex.get(methodName);
-      if (!op || !op.exposure.includes("method")) {
-        return {
-          result: { error: `unknown method: ${methodName}` },
-          isError: true,
-        };
-      }
-      if (op.needsRecovery) await this.ensureRecovered(channelId);
-      const result = await op.run(
-        this.operationContext,
-        channelId,
-        record(args),
-      );
-      const isError = Boolean(
-        result &&
-        typeof result === "object" &&
-        "error" in (result as Record<string, unknown>),
-      );
-      return isError ? { result, isError: true } : { result };
-    } catch (err) {
+    const op = this.operationIndex.get(methodName);
+    if (!op || !op.exposure.includes("method")) {
       return {
-        result: { error: err instanceof Error ? err.message : String(err) },
+        result: { error: `unknown method: ${methodName}` },
         isError: true,
       };
     }
+    const effects = this.boundNewsEffects(
+      withRpcAbortSignal(this.rpc, signal),
+      { ...BACKGROUND_CONTEXT, abortSignal: signal },
+    );
+    if (op.needsRecovery) await this.ensureRecovered(channelId, effects);
+    signal.throwIfAborted();
+    const result = await op.run(
+      { handlers: this, effects },
+      channelId,
+      record(args),
+    );
+    const isError = Boolean(
+      result &&
+      typeof result === "object" &&
+      "error" in (result as Record<string, unknown>),
+    );
+    return isError ? { result, isError: true } : { result };
   }
 
   // ── NewsHandlers implementation ───────────────────────────────────────────
@@ -939,10 +976,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async addFeed(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const url = stringArg(args, "url");
     if (!url) return { error: "url is required" };
-    const fetched = await fetchFeed(url, { fetcher: this.feedFetcher() });
+    const fetched = await fetchFeed(url, {
+      fetcher: effects?.fetcher ?? this.feedFetcher(),
+    });
+    effects?.signal?.throwIfAborted();
     if (fetched.status !== "ok") {
       return {
         error: `feed not reachable: ${fetched.status === "error" ? fetched.error : fetched.status}`,
@@ -963,8 +1004,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         };
       }
       const refetched = await fetchFeed(discovered, {
-        fetcher: this.feedFetcher(),
+        fetcher: effects?.fetcher ?? this.feedFetcher(),
       });
+      effects?.signal?.throwIfAborted();
       if (refetched.status !== "ok") {
         return {
           error: `discovered feed not reachable: ${refetched.status === "error" ? refetched.error : refetched.status}`,
@@ -1005,7 +1047,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       }
     }
     await this.markConfigured(channelId);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return {
       feedId,
       title: parsed.title,
@@ -1019,6 +1061,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async importOpml(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const opml = stringArg(args, "opml");
     if (!opml) return { error: "opml is required" };
@@ -1029,9 +1072,13 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     let imported = 0;
     const failed: string[] = [];
     for (const feed of slice) {
-      const result = (await this.addFeed(channelId, {
-        url: feed.url,
-      })) as Record<string, unknown>;
+      const result = (await this.addFeed(
+        channelId,
+        {
+          url: feed.url,
+        },
+        effects,
+      )) as Record<string, unknown>;
       if (result["error"]) failed.push(feed.url);
       else imported += 1;
     }
@@ -1048,6 +1095,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async removeFeed(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const feedId =
       stringArg(args, "feedId") ??
@@ -1060,13 +1108,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       channelId,
       feedId,
     );
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { removed: feedId };
   }
 
   async setFeedEnabled(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const feedId = stringArg(args, "feedId");
     const enabled = booleanArg(args, "enabled");
@@ -1078,13 +1127,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       channelId,
       feedId,
     );
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { feedId, enabled };
   }
 
   async followTopic(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const topic = stringArg(args, "topic");
     if (!topic) return { error: "topic is required" };
@@ -1096,13 +1146,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       numberArg(args, "weight") ?? 1.0,
     );
     await this.markConfigured(channelId);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { following: topic };
   }
 
   async unfollowTopic(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const topic = stringArg(args, "topic");
     if (!topic) return { error: "topic is required" };
@@ -1111,20 +1162,21 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       channelId,
       topic,
     );
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { unfollowed: topic };
   }
 
   async setPreferences(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const text = stringArg(args, "text") ?? "";
     const state = this.getChannelState(channelId);
     state.preferencesText = text || undefined;
     this.saveChannelState(state);
     await this.markConfigured(channelId);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { saved: true, preferencesText: state.preferencesText };
   }
 
@@ -1340,13 +1392,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async setBriefingPaused(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const paused = booleanArg(args, "paused");
     if (paused === undefined) return { error: "paused is required" };
     const state = this.getChannelState(channelId);
     state.briefingPaused = paused;
     this.saveChannelState(state);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return { briefingPaused: paused };
   }
 
@@ -1354,6 +1407,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async triageStories(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const items = Array.isArray(args["items"]) ? args["items"] : [];
     let triaged = 0;
@@ -1396,7 +1450,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         const state = this.getChannelState(channelId);
         state.lastError = `Categorization paused: ${err instanceof Error ? err.message : String(err)}`;
         this.saveChannelState(state);
-        await this.publishSetupCard(channelId);
+        await this.publishSetupCard(channelId, effects);
+        throw err;
       }
     }
     return { triaged, dropped, remaining, continued };
@@ -1417,6 +1472,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async publishBriefing(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const briefingId = stringArg(args, "briefingId");
     const tldr = stringArg(args, "tldr");
@@ -1425,12 +1481,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const sourcesRead = numberArg(args, "sourcesRead");
     const briefing = this.briefingState(channelId, briefingId);
     if (!briefing) return { error: `unknown briefing: ${briefingId}` };
-    if (briefing.status === "ready")
+    if (briefing.status === "ready") {
+      await this.deliverReadyBriefing(channelId, briefing, effects);
       return {
         published: briefingId,
         storyCount: briefing.stories.length,
         at: briefing.createdAt,
       };
+    }
     if (briefing.status !== "summarizing")
       return {
         error: `Briefing ${briefingId} is ${briefing.status} and cannot be published.`,
@@ -1511,67 +1569,81 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     }
 
     const now = this.now();
-    const committed = this.sql
-      .exec(
-        `UPDATE news_briefings SET status = 'ready', tldr = ?, story_ids_json = ?, sources_read = ? WHERE channel_id = ? AND briefing_id = ? AND status = 'summarizing' RETURNING briefing_id`,
-        tldr,
-        JSON.stringify(kept.map((story) => story.articleId)),
-        sourcesRead ?? null,
-        channelId,
-        briefingId,
-      )
-      .toArray();
-    if (committed.length === 0)
-      return { error: `Briefing ${briefingId} ended before publication.` };
-    for (const story of kept) {
-      this.sql.exec(
-        `UPDATE news_articles SET briefed_in = ?, blurb = COALESCE(?, blurb), triaged = 1 WHERE channel_id = ? AND article_id = ?`,
-        briefingId,
-        story.blurb ?? null,
-        channelId,
-        story.articleId,
-      );
-    }
-    for (const prefix of dropped) {
-      const id = this.resolveArticleId(channelId, prefix);
-      if (!id) continue;
-      this.sql.exec(
-        `UPDATE news_articles SET briefed_in = ? WHERE channel_id = ? AND article_id = ?`,
-        `dropped:${briefingId}`,
-        channelId,
-        id,
-      );
-    }
-    const state = this.getChannelState(channelId);
-    state.lastBriefingId = briefingId;
-    this.saveChannelState(state);
+    const published = this.ctx.storage.transactionSync(() => {
+      const committed = this.sql
+        .exec(
+          `UPDATE news_briefings SET status = 'ready', tldr = ?, story_ids_json = ?, sources_read = ? WHERE channel_id = ? AND briefing_id = ? AND status = 'summarizing' RETURNING briefing_id`,
+          tldr,
+          JSON.stringify(kept.map((story) => story.articleId)),
+          sourcesRead ?? null,
+          channelId,
+          briefingId,
+        )
+        .toArray();
+      if (committed.length === 0) return false;
+      for (const story of kept) {
+        this.sql.exec(
+          `UPDATE news_articles SET briefed_in = ?, blurb = COALESCE(?, blurb), triaged = 1 WHERE channel_id = ? AND article_id = ?`,
+          briefingId,
+          story.blurb ?? null,
+          channelId,
+          story.articleId,
+        );
+      }
+      for (const prefix of dropped) {
+        const id = this.resolveArticleId(channelId, prefix);
+        if (!id) continue;
+        this.sql.exec(
+          `UPDATE news_articles SET briefed_in = ? WHERE channel_id = ? AND article_id = ?`,
+          `dropped:${briefingId}`,
+          channelId,
+          id,
+        );
+      }
+      const state = this.getChannelState(channelId);
+      state.lastBriefingId = briefingId;
+      this.saveChannelState(state);
 
-    await this.newsCards.updateBriefing(channelId, briefingId, {
-      briefingId,
-      createdAt: briefing.createdAt,
-      status: "ready",
-      tldr,
-      stories: kept,
-      articleCountScanned: briefing.articleCountScanned,
-      newSinceLastRun: briefing.newSinceLastRun,
-      ...(sourcesRead !== undefined ? { sourcesRead } : {}),
+      return true;
     });
-    // Only scheduled/cold-start briefings notify; a manual "Brief me now" is silent.
-    const notifyRow = this.sql
-      .exec(
-        `SELECT notify FROM news_briefings WHERE channel_id = ? AND briefing_id = ?`,
-        channelId,
-        briefingId,
-      )
-      .toArray()[0];
-    if (Number(notifyRow?.["notify"] ?? 1) !== 0) {
-      await this.notifyBriefingReady(channelId, briefingId, kept, sourcesRead);
-    }
+    if (!published)
+      return { error: `Briefing ${briefingId} ended before publication.` };
+    const ready = this.briefingState(channelId, briefingId);
+    if (!ready || ready.status !== "ready")
+      throw new Error("Committed briefing disappeared before delivery");
+    await this.deliverReadyBriefing(channelId, ready, effects);
     return {
       published: briefingId,
       storyCount: kept.length,
       at: new Date(now).toISOString(),
     };
+  }
+
+  private async deliverReadyBriefing(
+    channelId: string,
+    briefing: NewsBriefingCardState,
+    effects?: NewsEffects,
+  ): Promise<void> {
+    await (effects?.cards ?? this.newsCards).updateBriefing(
+      channelId,
+      briefing.briefingId,
+      briefing,
+    );
+    const notify = this.sql
+      .exec(
+        "SELECT notify FROM news_briefings WHERE channel_id = ? AND briefing_id = ?",
+        channelId,
+        briefing.briefingId,
+      )
+      .toArray()[0];
+    if (Number(notify?.["notify"] ?? 1) !== 0)
+      await this.notifyBriefingReady(
+        channelId,
+        briefing.briefingId,
+        briefing.stories,
+        briefing.sourcesRead,
+        effects,
+      );
   }
 
   /**
@@ -1582,14 +1654,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
    * there. A manual "Brief me now" never reaches here: the reader is already
    * looking at the panel that ran it.
    *
-   * Best-effort. A failed escalation must never fail the briefing, which is
-   * already durable in the channel.
+   * The canonical briefing survives delivery failure. Its original invocation
+   * remains failed until the same card and notification delivery is repaired.
    */
   private async notifyBriefingReady(
     channelId: string,
     briefingId: string,
     stories: NewsStoryRef[],
     sourcesRead?: number,
+    effects?: NewsEffects,
   ): Promise<void> {
     if (stories.length === 0) return;
     const owner = this.channelOwnerUserId(channelId);
@@ -1603,8 +1676,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       sourcesRead && sourcesRead > 0
         ? ` · ${sourcesRead} source${sourcesRead > 1 ? "s" : ""} read`
         : "";
-    try {
-      await this.escalateNotify({
+    await this.escalateNotify(
+      {
         userId: owner,
         channelId,
         messageId: briefingCardKey(briefingId),
@@ -1613,10 +1686,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         rung: "inbox",
         title: `Your briefing is ready — ${stories.length} stor${stories.length > 1 ? "ies" : "y"}${readNote}`,
         message: `${headlines.map((headline) => `- ${headline}`).join("\n")}${more}`,
-      });
-    } catch (err) {
-      console.warn("[NewsAgent] briefing escalation failed:", err);
-    }
+      },
+      effects?.rpc ?? this.rpc,
+    );
   }
 
   /** The single person on this channel, when there is one. See the messaging
@@ -1667,6 +1739,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async setSchedule(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const state = this.getChannelState(channelId);
     const pollIntervalMs = numberArg(args, "pollIntervalMs");
@@ -1694,7 +1767,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       }
     }
     this.saveChannelState(state);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
     return {
       pollIntervalMs: state.pollIntervalMs,
       briefingIntervalMs: state.briefingIntervalMs,
@@ -1751,6 +1824,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async reactToStory(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
     const idOrPrefix = stringArg(args, "articleId");
     const reaction = stringArg(args, "reaction");
@@ -1805,7 +1879,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         channelId,
         articleId,
       );
-      await this.publishSetupCard(channelId);
+      await this.publishSetupCard(channelId, effects);
       return { muted: source, feedDisabled: Boolean(feedId) };
     }
 

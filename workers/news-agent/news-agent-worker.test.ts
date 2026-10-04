@@ -1,15 +1,53 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { rpcMethodAuthority } from "@vibestudio/rpc";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { rpcMethodAuthority, type RpcClient } from "@vibestudio/rpc";
+import { createNativeVesselTestDO as createTestDO } from "@workspace/agentic-do/testing/native-vessel";
+import { createNativeChannelProvider } from "@workspace/agentic-do/testing/native-channel-provider";
+import { createModels, fauxProvider } from "@panticonic/pi-ai";
+import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
+import {
+  Harness,
+  MemoryStorage,
+  createRegistry,
+  defineExtension,
+  DirectToolResultEntry,
+  type JsonObject,
+  type ToolExecutionApi,
+  type SettledSubmissionRecord,
+  type SubmissionId,
+  type ConversationId,
+} from "@panticonic/pi-durable";
+import type { AgentProductMetadata } from "@workspace/agentic-core/agent-product-metadata";
+const resources: Array<{
+  instance: TestNewsAgentWorker;
+  db: { close(): void };
+}> = [];
+afterEach(async () => {
+  const results = await Promise.allSettled(
+    resources.map(({ instance }) =>
+      instance.releaseForLifecycle({
+        epoch: "test-end",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 0,
+      }),
+    ),
+  );
+  for (const resource of resources.splice(0)) {
+    try {
+      await resource.instance.closeMethodChannels();
+    } finally {
+      resource.db.close();
+    }
+  }
+  for (const result of results)
+    if (result.status === "rejected") throw result.reason;
+});
 import type { Fetcher } from "@workspace/feeds";
 import { articleId } from "@workspace/feeds";
 import type { NewsBriefingCardState } from "@workspace/feeds/card-types";
 
-import type {
-  AgentInitiatedTurnOptions,
-  AgentTurnClosedInput,
-} from "@workspace/agentic-do";
+import type { AgentInitiatedTurnOptions } from "@workspace/agentic-do";
 import { NewsAgentWorker } from "./news-agent-worker.js";
 import { NEWS_MESSAGE_TYPES } from "./cards.js";
 import { ARTICLE_RETENTION_MS } from "./types.js";
@@ -32,6 +70,49 @@ function rss(
 }
 
 class TestNewsAgentWorker extends NewsAgentWorker {
+  // Genuine ChannelDO fixture deliveries use the trusted host RPC boundary.
+  protected override get rpcCallerKind(): string | null {
+    return "server";
+  }
+  private readonly methodChannels = new Map<
+    string,
+    ReturnType<typeof createNativeChannelProvider>
+  >();
+  private methodChannel(channelId: string) {
+    let channel = this.methodChannels.get(channelId);
+    if (!channel) {
+      channel = createNativeChannelProvider({
+        channelId,
+        participantId: this.participantId(),
+        deliver: (...args) => this.onMethodCall(...args),
+        cancel: (id, callId) => this.cancelDirectMethodCall(id, callId),
+      });
+      this.methodChannels.set(channelId, channel);
+    }
+    return channel;
+  }
+  async deliveredMethod(
+    channelId: string,
+    callId: string,
+    method: string,
+    args: unknown,
+  ) {
+    return (await this.methodChannel(channelId)).invoke(callId, method, args);
+  }
+  async cancelDeliveredMethod(channelId: string, callId: string) {
+    return (await this.methodChannel(channelId)).cancel(callId);
+  }
+  async closeMethodChannels() {
+    const outcomes = await Promise.allSettled(
+      [...this.methodChannels.values()].map(async (channel) =>
+        (await channel).close(),
+      ),
+    );
+    this.methodChannels.clear();
+    for (const outcome of outcomes)
+      if (outcome.status === "rejected") throw outcome.reason;
+  }
+  heldFeedFetcher: Fetcher | null = null;
   published: Array<{
     participantId: string;
     event: { kind?: string; payload?: unknown };
@@ -50,6 +131,7 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   >();
   blobs = new Map<string, string>();
   clock: number = 1_750_000_000_000;
+  failNextPublication: Error | null = null;
 
   execSqlForTest(query: string, ...args: unknown[]): void {
     this.sql.exec(query, ...args);
@@ -64,8 +146,8 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     >;
   }
 
-  async loopTools(channelId = "ch-1") {
-    return (await this.getLoopTools(channelId)).map((tool) => tool.name);
+  async nativeTools(channelId = "ch-1") {
+    return (await this.getTools(channelId)).map((tool) => tool.name);
   }
 
   seedUserRoster(channelId = "ch-1") {
@@ -82,10 +164,8 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   }
 
   /** The exact loop tool object the model loop would dispatch for `name`. */
-  async loopTool(name: string, channelId = "ch-1") {
-    return (await this.getLoopTools(channelId)).find(
-      (tool) => tool.name === name,
-    );
+  async nativeTool(name: string, channelId = "ch-1") {
+    return (await this.getTools(channelId)).find((tool) => tool.name === name);
   }
 
   protected override now(): number {
@@ -101,6 +181,7 @@ class TestNewsAgentWorker extends NewsAgentWorker {
       _target: string,
       method: string,
       args?: unknown[],
+      _options?: import("@vibestudio/rpc").RpcCallOptions,
     ): Promise<unknown> => {
       if (method === "runtime.resolveContext") return "ctx-1";
       if (method === "workers.resolveService") {
@@ -153,13 +234,28 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     },
   );
 
-  protected override get rpc(): never {
-    return {
-      call: this.rpcCall,
-    } as never;
+  protected override get rpc(): RpcClient {
+    const base = super.rpc;
+    const call = this.rpcCall;
+    return new Proxy(base, {
+      get(target, property, receiver) {
+        if (property === "call") return workerCall;
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    function workerCall<T>(
+      target: string,
+      method: string,
+      args: unknown[],
+      options?: import("@vibestudio/rpc").RpcCallOptions,
+    ): Promise<T> {
+      return call(target, method, args, options) as Promise<T>;
+    }
   }
 
   protected override feedFetcher(): Fetcher {
+    if (this.heldFeedFetcher) return this.heldFeedFetcher;
     return async (url) => {
       const queue = this.feedResponses.get(url);
       if (!queue || queue.length === 0)
@@ -172,7 +268,7 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     };
   }
 
-  seedSubscription(channelId = "ch-1", participantId = "agent-news") {
+  seedSubscription(channelId = "ch-1", participantId = this.participantId()) {
     this.sql.exec(
       `INSERT OR REPLACE INTO subscriptions
          (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
@@ -199,12 +295,81 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     });
   }
 
-  closeBriefingTurn(input: AgentTurnClosedInput) {
-    return this.onTurnClosed(input);
+  settleBriefingInput(
+    channelId: string,
+    submission: SettledSubmissionRecord,
+    metadata?: AgentProductMetadata,
+  ) {
+    return this.onNativeInputSettled(
+      channelId,
+      submission,
+      metadata,
+      BACKGROUND_CONTEXT,
+    );
   }
+  applyAnalystForkPolicy(oldChannelId: string, newChannelId: string) {
+    return this.onChannelForked({
+      oldChannelId,
+      newChannelId,
+      forkPointPubsubId: 7,
+    });
+  }
+  protected override callAgentHost = async <T>(
+    method: string,
+    _args: unknown[],
+  ): Promise<T> => {
+    const image = this.loadedImage();
+    const value =
+      method === "workspace-state.entity.resolveActive"
+        ? {
+            id: image.runtimeId,
+            authoritySessionId: "test-owner",
+            kind: "do",
+            source: { repoPath: image.source, effectiveVersion: "test" },
+            activeExecutionDigest: image.executionDigest,
+            className: image.className,
+            key: image.objectKey,
+            contextId: "ctx-1",
+            createdAt: 1,
+            status: "active",
+            cleanupComplete: false,
+          }
+        : method === "workspace-state.alarmSourceRegister"
+          ? "test-storage-incarnation"
+          : method === "workspace-state.alarmSourcePublish"
+            ? "accepted"
+            : method === "authority.outstandingAcquisitions"
+              ? { receipts: [], next: null }
+              : [
+                    "workspace-state.lifecycleLeaseUpsert",
+                    "workspace-state.lifecycleLeaseClear",
+                    "workerLog.write",
+                  ].includes(method)
+                ? undefined
+                : (() => {
+                    throw new Error(`Unexpected host fixture ${method}`);
+                  })();
+    return value as T;
+  };
 
-  protected override createChannelClient() {
+  protected override createChannelClient(channelId: string) {
     return {
+      getEnvelope: async (messageId: string) =>
+        (await this.methodChannel(channelId)).channel.callAs(
+          { callerId: this.participantId(), callerKind: "do" },
+          "getEnvelope",
+          messageId,
+        ),
+      markMethodCallExecutionStarted: async (
+        participantId: string,
+        callId: string,
+        generation: number,
+      ) =>
+        (await this.methodChannel(channelId)).markExecutionStarted(
+          participantId,
+          callId,
+          generation,
+        ),
       relationshipState: async () => null,
       join: async (input: { participantId: string; revision: number }) => ({
         ok: true,
@@ -227,6 +392,11 @@ class TestNewsAgentWorker extends NewsAgentWorker {
         event: { kind?: string; payload?: unknown },
       ) => {
         this.published.push({ participantId, event });
+        if (this.failNextPublication) {
+          const failure = this.failNextPublication;
+          this.failNextPublication = null;
+          throw failure;
+        }
         return { id: this.published.length };
       },
       sendSignal: async (
@@ -274,11 +444,15 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 }
 
 async function makeWorker() {
-  const { instance } = await createTestDO(TestNewsAgentWorker, {
+  const resource = await createTestDO(TestNewsAgentWorker, {
+    WORKER_SOURCE: "workers/news-agent",
+    WORKER_CLASS_NAME: "NewsAgentWorker",
+    WORKER_EXECUTION_DIGEST: "e".repeat(64),
     WORKERD_SESSION_ID: "test-session",
     WORKERD_BOOT_GENERATION: "1",
   });
-  const worker = instance as TestNewsAgentWorker;
+  resources.push(resource);
+  const worker = resource.instance as TestNewsAgentWorker;
   worker.seedSubscription();
   return worker;
 }
@@ -322,7 +496,7 @@ describe("NewsAgentWorker", () => {
   it("exposes the web research tools its briefing prompt requires", async () => {
     const worker = await makeWorker();
     worker.seedUserRoster();
-    expect(await worker.loopTools()).toEqual(
+    expect(await worker.nativeTools()).toEqual(
       expect.arrayContaining([
         "suspend_turn",
         "ask_user",
@@ -1037,38 +1211,33 @@ describe("NewsAgentWorker", () => {
         "SELECT briefing_id FROM news_briefings ORDER BY created_at DESC",
       )[0]!["briefing_id"],
     );
-    const binding = worker.rowsForTest(
-      "SELECT key FROM state WHERE value = ? AND key LIKE 'news:briefing-turn:%'",
-      briefingId,
-    )[0]!;
-    const [, turnId] = JSON.parse(
-      String(binding["key"]).slice("news:briefing-turn:".length),
-    ) as string[];
+    const metadata = worker.agentInitiatedTurns.find(
+      (input) => input.options?.domain?.kind === "news.briefing",
+    )!.options;
+    expect(metadata?.domain).toEqual({
+      kind: "news.briefing",
+      data: { briefingId },
+    });
     worker.clock += 31 * 60_000;
     await worker.refreshNow("ch-1", {});
-    const closed = {
-      channelId: "ch-1",
-      turnId: turnId!,
-      metadata: {},
+    const closed: SettledSubmissionRecord = {
+      id: 1 as SubmissionId,
+      conversationId: 1 as ConversationId,
+      type: "input",
+      status: "unanswered",
       reason: "work_failed",
-      effectFailures: [
-        {
-          invocationId: "inv-1",
-          name: "fetch",
-          outcome: "infrastructure_error" as const,
-          code: "disconnected",
-          message: "Provider disconnected",
-        },
-      ],
+      detail: { message: "Provider disconnected" },
     };
-    await worker.closeBriefingTurn({ ...closed, turnId: "unrelated-turn" });
+    await worker.settleBriefingInput("ch-1", closed, {
+      domain: { kind: "other.operation", data: { briefingId } },
+    });
     expect(
       worker.rowsForTest(
         "SELECT status FROM news_briefings WHERE briefing_id = ?",
         briefingId,
       )[0]!["status"],
     ).toBe("summarizing");
-    await worker.closeBriefingTurn(closed);
+    await worker.settleBriefingInput("ch-1", closed, metadata);
     expect(
       worker.rowsForTest(
         "SELECT status FROM news_briefings WHERE briefing_id = ?",
@@ -1183,7 +1352,7 @@ describe("NewsAgentWorker", () => {
       { title: "A", link: "https://example.com/a" },
     ]);
 
-    const overview = await worker.onMethodCall(
+    const overview = await worker.deliveredMethod(
       "ch-1",
       "call-1",
       "getOverview",
@@ -1191,7 +1360,7 @@ describe("NewsAgentWorker", () => {
     );
     expect(record(overview.result)["articleCount"]).toBe(1);
 
-    const schedule = await worker.onMethodCall(
+    const schedule = await worker.deliveredMethod(
       "ch-1",
       "call-2",
       "setSchedule",
@@ -1201,7 +1370,7 @@ describe("NewsAgentWorker", () => {
     );
     expect(record(schedule.result)["briefingAtMinutes"]).toBe(480);
 
-    const followed = await worker.onMethodCall(
+    const followed = await worker.deliveredMethod(
       "ch-1",
       "call-3",
       "news_follow_topic",
@@ -1211,7 +1380,7 @@ describe("NewsAgentWorker", () => {
     );
     expect(followed.isError).not.toBe(true);
 
-    const retiredAlias = await worker.onMethodCall(
+    const retiredAlias = await worker.deliveredMethod(
       "ch-1",
       "call-4",
       "followTopic",
@@ -1221,17 +1390,76 @@ describe("NewsAgentWorker", () => {
     );
     expect(retiredAlias.isError).toBe(true);
 
-    const unknown = await worker.onMethodCall("ch-1", "call-5", "fly", {});
+    const unknown = await worker.deliveredMethod("ch-1", "call-5", "fly", {});
     expect(unknown.isError).toBe(true);
 
     // Tool-only operations are not callable as methods.
-    const toolOnly = await worker.onMethodCall(
+    const toolOnly = await worker.deliveredMethod(
       "ch-1",
       "call-6",
       "news_publish_briefing",
       {},
     );
     expect(toolOnly.isError).toBe(true);
+  });
+
+  it("refuses a custom News method without its actual provider claim", async () => {
+    const worker = await makeWorker();
+    await expect(
+      worker.onMethodCall("ch-1", "unclaimed", "news_follow_topic", {
+        topic: "unclaimed mutation",
+      }),
+    ).rejects.toThrow("actual channel provider claim");
+    expect(
+      worker.rowsForTest(
+        "SELECT topic FROM news_topics WHERE channel_id = ?",
+        "ch-1",
+      ),
+    ).toEqual([]);
+  });
+
+  it("joins cancellation of the original claimed feed fetch before any News mutation", async () => {
+    const worker = await makeWorker();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let originalSignal: AbortSignal | undefined;
+    worker.heldFeedFetcher = async (_url, init) => {
+      originalSignal = init?.signal ?? undefined;
+      if (!originalSignal)
+        throw new Error("Feed fetch did not receive its owned method signal");
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = originalSignal!;
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+        entered();
+      });
+    };
+    const result = worker.deliveredMethod(
+      "ch-1",
+      "held-feed",
+      "news_add_feed",
+      { url: FEED_URL },
+    );
+    const rejected = expect(result).rejects.toThrow("method call cancelled");
+    void rejected.catch(() => undefined);
+    await Promise.race([
+      started,
+      result.then(() => {
+        throw new Error("Feed method completed before the owned fetch started");
+      }),
+    ]);
+    await worker.cancelDeliveredMethod("ch-1", "held-feed");
+    await rejected;
+    expect(originalSignal?.aborted).toBe(true);
+    expect(
+      worker.rowsForTest(
+        "SELECT feed_id FROM news_feeds WHERE channel_id = ?",
+        "ch-1",
+      ),
+    ).toEqual([]);
   });
 
   it("uses full literal article identities for accepted save and read actions", async () => {
@@ -1437,7 +1665,7 @@ describe("NewsAgentWorker", () => {
       .mockResolvedValue(folded as never);
 
     // requestDeepDive declares needsRecovery; dispatch via onMethodCall runs it.
-    await worker.onMethodCall("ch-1", "call-1", "requestDeepDive", {
+    await worker.deliveredMethod("ch-1", "call-1", "requestDeepDive", {
       articleId: "missing",
     });
     expect(spy).toHaveBeenCalledOnce();
@@ -1457,72 +1685,188 @@ describe("NewsAgentWorker", () => {
   });
 });
 
-describe("NewsAgentWorker deep-dive fork (postClone integration)", () => {
-  it("postClone purges the parent channel and marks the fork an analyst thread", async () => {
-    const worker = await makeWorker();
-    await worker.subscribeChannel({
-      channelId: "ch-1",
-      contextId: "ctx-1",
-    } as never);
-    await addExampleFeed(worker, [
+describe("NewsAgentWorker fresh analyst fork policy", () => {
+  it("starts analyst storage fresh and preserves the parent's curator data", async () => {
+    const parent = await makeWorker();
+    await addExampleFeed(parent, [
       { title: "Story A", link: "https://example.com/a" },
     ]);
-    // Parent is a configured curator channel with feed state.
+    const child = await makeWorker();
+    await child.applyAnalystForkPolicy("ch-1", "fork:analyst");
+    expect(child.rowsForTest("SELECT feed_id FROM news_feeds")).toHaveLength(0);
     expect(
-      worker.rowsForTest(
-        `SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`,
+      child.rowsForTest(
+        "SELECT mode FROM news_channel_state WHERE channel_id = ?",
+        "fork:analyst",
+      )[0],
+    ).toMatchObject({ mode: "analyst" });
+    expect(
+      parent.rowsForTest(
+        "SELECT feed_id FROM news_feeds WHERE channel_id = ?",
+        "ch-1",
       ),
     ).toHaveLength(1);
-
-    // Simulate the clone running postClone: parent ch-1 → forked deep-dive channel.
-    const publishedBefore = worker.published.length;
-    await worker.postClone(
-      "parent-key",
-      "fork:ch-1:xyz",
-      "ch-1",
-      7,
-      "ctx-forked",
-    );
-
-    // Parent channel's copied state is purged from the clone.
-    expect(
-      worker.rowsForTest(
-        `SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`,
-      ),
-    ).toHaveLength(0);
-    expect(
-      worker.rowsForTest(
-        `SELECT channel_id FROM news_channel_state WHERE channel_id = 'ch-1'`,
-      ),
-    ).toHaveLength(0);
-
-    // The fork is an analyst thread: marked analyst and has no setup card.
-    expect(
-      worker.rowsForTest(
-        `SELECT mode FROM news_channel_state WHERE channel_id = 'fork:ch-1:xyz'`,
-      )[0]!["mode"],
-    ).toBe("analyst");
-    const newSetupCards = worker.published
-      .slice(publishedBefore)
-      .filter((entry) => entry.event.kind === "custom.started");
-    expect(newSetupCards).toHaveLength(0);
-
-    // And the analyst opening turn can be seeded on the fork.
-    const turnsBefore = worker.agentInitiatedTurns.length;
-    await worker.startDeepDive("fork:ch-1:xyz", {
+    await child.startDeepDive("fork:analyst", {
       url: "https://example.com/a",
       title: "Story A",
     });
-    expect(worker.agentInitiatedTurns.length).toBe(turnsBefore + 1);
+    expect(child.agentInitiatedTurns.at(-1)?.channelId).toBe("fork:analyst");
   });
 });
 
-describe("NewsAgentWorker loop tool execution (integration)", () => {
-  // The generic model→tool→model→close loop is covered by the agent-loop driver
-  // tests. This asserts the news-specific seam: the exact tool object the loop
-  // dispatches for a model's news_publish_briefing call runs the real operation
-  // and finalizes the briefing (status → ready, stories marked briefed).
-  it("the news_publish_briefing loop tool runs the real operation end to end", async () => {
+async function invokeNewsTool(
+  worker: TestNewsAgentWorker,
+  name: string,
+  args: JsonObject,
+) {
+  const tool = await worker.nativeTool(name);
+  if (!tool) throw new Error(`Missing native News tool ${name}`);
+  // This domain proof uses real native scheduling/API and mocks only the already
+  // tested host attribution boundary. The operation and canonical cards are real.
+  const boundary = vi
+    .spyOn(worker as never, "bindNativeToolExecution")
+    .mockImplementation(async (...values: unknown[]) => {
+      const api = values[0] as ToolExecutionApi;
+      expect(api.taskId).toBeGreaterThan(0);
+      return { rpc: (worker as unknown as { rpc: RpcClient }).rpc };
+    });
+  const models = createModels();
+  const provider = fauxProvider();
+  models.setProvider(provider.provider);
+  const registry = createRegistry();
+  registry.install(defineExtension({ name: "news-domain", tools: [tool] }));
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models, registry },
+    BACKGROUND_CONTEXT,
+  );
+  try {
+    const conversation = await harness.createConversation(
+      {
+        ownership: { kind: "ownerless" },
+        agent: {
+          model: { provider: "faux", modelId: "faux-1" },
+          tools: [tool],
+        },
+      },
+      BACKGROUND_CONTEXT,
+    );
+    const id = await conversation.invokeTool(
+      {
+        id: "original-news-call",
+        name,
+        arguments: args,
+      },
+      BACKGROUND_CONTEXT,
+    );
+    const task = await harness.waitForTask(id, BACKGROUND_CONTEXT);
+    if (task.state.outcome.status !== "completed")
+      throw new Error("News task did not complete");
+    const result = await conversation.entries(
+      {
+        minEntryId: task.state.outcome.result.entryId,
+        maxEntryId: task.state.outcome.result.entryId,
+      },
+      1,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    const entry = result.items[0];
+    if (!entry || !DirectToolResultEntry.is(entry))
+      throw new Error("News tool has no actual result entry");
+    expect(provider.state.callCount).toBe(0);
+    return entry.data.result;
+  } finally {
+    await harness.close(BACKGROUND_CONTEXT);
+    boundary.mockRestore();
+  }
+}
+
+describe("NewsAgentWorker canonical briefing delivery recovery", () => {
+  async function pending() {
+    const worker = await makeWorker();
+    await addExampleFeed(worker, [
+      { title: "Original story", link: "https://example.com/original" },
+    ]);
+    await worker.refreshNow("ch-1", { briefing: true });
+    const briefingId = String(
+      worker.rowsForTest("SELECT briefing_id FROM news_briefings")[0]![
+        "briefing_id"
+      ],
+    );
+    return { worker, briefingId };
+  }
+  it("retains the original ready briefing through a lost card reply and re-delivers on retry", async () => {
+    const { worker, briefingId } = await pending();
+    const original = new Error("Accepted card reply disconnected");
+    worker.failNextPublication = original;
+    await expect(
+      worker.publishBriefing("ch-1", { briefingId, tldr: "Original summary" }),
+    ).rejects.toBe(original);
+    expect(
+      worker.rowsForTest(
+        "SELECT status, tldr FROM news_briefings WHERE briefing_id = ?",
+        briefingId,
+      )[0],
+    ).toMatchObject({ status: "ready", tldr: "Original summary" });
+    const before = worker.published.length;
+    await expect(
+      worker.publishBriefing("ch-1", {
+        briefingId,
+        tldr: "Changed retry text",
+      }),
+    ).resolves.toMatchObject({ published: briefingId });
+    expect(worker.published.length).toBeGreaterThan(before);
+    expect(
+      worker.rowsForTest(
+        "SELECT tldr FROM news_briefings WHERE briefing_id = ?",
+        briefingId,
+      )[0]!["tldr"],
+    ).toBe("Original summary");
+    expect(
+      worker.rowsForTest("SELECT COUNT(*) AS count FROM news_briefings")[0]![
+        "count"
+      ],
+    ).toBe(1);
+  });
+  it("propagates original inbox failure and retries notification for the original briefing", async () => {
+    const { worker, briefingId } = await pending();
+    worker.seedUserRoster();
+    worker.execSqlForTest(
+      "UPDATE news_briefings SET notify = 1 WHERE briefing_id = ?",
+      briefingId,
+    );
+    const original = new Error("Original notification delivery rejected");
+    const notify = vi
+      .spyOn(
+        worker as unknown as {
+          escalateNotify(input: unknown, rpc?: RpcClient): Promise<string>;
+        },
+        "escalateNotify",
+      )
+      .mockRejectedValueOnce(original)
+      .mockResolvedValue("accepted-original-notice");
+    try {
+      await expect(
+        worker.publishBriefing("ch-1", {
+          briefingId,
+          tldr: "Original summary",
+        }),
+      ).rejects.toBe(original);
+      await worker.publishBriefing("ch-1", {
+        briefingId,
+        tldr: "Changed retry",
+      });
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(notify.mock.calls[0]![0]).toEqual(notify.mock.calls[1]![0]);
+    } finally {
+      notify.mockRestore();
+    }
+  });
+});
+
+describe("NewsAgentWorker native tool execution", () => {
+  it("the native news_publish_briefing tool runs the real operation end to end", async () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
@@ -1539,17 +1883,10 @@ describe("NewsAgentWorker loop tool execution (integration)", () => {
       JSON.stringify([aid]),
     );
 
-    // Execute the exact loop tool the model would call (tool.execute → op.run →
-    // publishBriefing), the same dispatch the agent loop performs.
-    const tool = (await worker.loopTool("news_publish_briefing"))!;
-    expect(tool).toBeTruthy();
-    const result = (await tool.execute("inv-1", {
+    const result = await invokeNewsTool(worker, "news_publish_briefing", {
       briefingId: "b-1",
       tldr: "**Story A** shipped.",
-    })) as {
-      content?: Array<{ text?: string }>;
-      details?: { published?: string };
-    };
+    });
 
     expect(
       worker.rowsForTest(
@@ -1563,7 +1900,7 @@ describe("NewsAgentWorker loop tool execution (integration)", () => {
       )[0]!["briefed_in"],
     ).toBe("b-1");
     // The tool hands the model structured details + protocol text.
-    expect(result.details?.published).toBe("b-1");
+    expect(record(result)["details"]).toMatchObject({ published: "b-1" });
   });
 });
 

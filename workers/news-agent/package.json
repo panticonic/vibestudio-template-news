@@ -139,11 +139,13 @@
     "@workspace/feeds": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@workspace/pi-core": "workspace:*",
-    "@workspace/agent-loop": "workspace:*"
+    "@panticonic/pi-ai": "0.99.2-vibestudio.11",
+    "@panticonic/pi-chord": "0.99.2-vibestudio.11",
+    "@panticonic/pi-durable": "0.99.2-vibestudio.11",
+    "@workspace/agentic-core": "workspace:*",
+    "@vibestudio/rpc": "workspace:*"
   },
   "devDependencies": {
-    "@vibestudio/rpc": "workspace:*",
     "vitest": "^3.2.7"
   }
 }

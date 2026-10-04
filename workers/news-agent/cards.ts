@@ -1,4 +1,8 @@
-import type { CardManager, CustomMessageHandle, MessageTypeSpec } from "@workspace/agentic-do";
+import type {
+  CardManager,
+  CustomMessageHandle,
+  MessageTypeSpec,
+} from "@workspace/agentic-do";
 import {
   NEWS_BRIEFING_STATE_SCHEMA,
   NEWS_SETUP_STATE_SCHEMA,
@@ -37,7 +41,8 @@ export const NEWS_MESSAGE_TYPES: MessageTypeSpec[] = [
 ];
 
 export const SETUP_CARD_KEY = "news:setup";
-export const briefingCardKey = (briefingId: string): string => `news:briefing:${briefingId}`;
+export const briefingCardKey = (briefingId: string): string =>
+  `news:briefing:${briefingId}`;
 
 /**
  * News card publishing on the platform CardManager. The setup card is a
@@ -47,40 +52,55 @@ export const briefingCardKey = (briefingId: string): string => `news:briefing:${
 export class NewsCards {
   constructor(private readonly cards: CardManager) {}
 
-  async publishSetup(channelId: string, payload: NewsSetupCardState): Promise<void> {
+  async publishSetup(
+    channelId: string,
+    payload: NewsSetupCardState,
+  ): Promise<void> {
     const existing = this.cards.find(channelId, SETUP_CARD_KEY);
     if (existing) {
       await existing.update(payload);
       return;
     }
-    await this.cards.getOrCreate(channelId, "news.setup", SETUP_CARD_KEY, payload, {
-      displayMode: "inline",
-    });
+    await this.cards.getOrCreate(
+      channelId,
+      "news.setup",
+      SETUP_CARD_KEY,
+      payload,
+      {
+        displayMode: "inline",
+      },
+    );
   }
 
   async createBriefing(
     channelId: string,
-    payload: NewsBriefingCardState
+    payload: NewsBriefingCardState,
   ): Promise<CustomMessageHandle> {
     return this.cards.getOrCreate(
       channelId,
       "news.briefing",
       briefingCardKey(payload.briefingId),
       payload,
-      { displayMode: "inline" }
+      { displayMode: "inline" },
     );
   }
 
   async updateBriefing(
     channelId: string,
     briefingId: string,
-    payload: NewsBriefingCardState
+    payload: NewsBriefingCardState,
   ): Promise<void> {
     const handle = this.cards.find(channelId, briefingCardKey(briefingId));
     if (handle) await handle.update(payload);
+    else await this.createBriefing(channelId, payload);
   }
 
-  adoptRecoveredCard(channelId: string, key: string, typeId: string, messageId: string): void {
+  adoptRecoveredCard(
+    channelId: string,
+    key: string,
+    typeId: string,
+    messageId: string,
+  ): void {
     this.cards.adoptRecovered(channelId, key, typeId, messageId);
   }
 }

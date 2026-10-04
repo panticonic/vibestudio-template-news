@@ -1,3 +1,16 @@
+import type { CardManager } from "@workspace/agentic-do";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { Fetcher } from "@workspace/feeds";
+import type { NewsCards } from "./cards.js";
+
+export interface NewsEffects {
+  cards: NewsCards;
+  manager: CardManager;
+  rpc: RpcClient;
+  fetcher: Fetcher;
+  signal?: AbortSignal;
+}
+
 import { record } from "./types.js";
 import { NEWS_METHODS } from "@workspace/feeds";
 
@@ -8,33 +21,106 @@ import { NEWS_METHODS } from "@workspace/feeds";
  * drift.
  */
 export interface NewsHandlers {
-  addFeed(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  importOpml(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  removeFeed(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  setFeedEnabled(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  followTopic(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  unfollowTopic(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  setPreferences(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  listArticles(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  publishBriefing(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  briefingHistory(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  setSchedule(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  setBriefingPaused(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  addFeed(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  importOpml(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  removeFeed(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  setFeedEnabled(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  followTopic(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  unfollowTopic(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  setPreferences(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  listArticles(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  publishBriefing(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  briefingHistory(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  setSchedule(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  setBriefingPaused(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
   markRead(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  markAllRead(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  markAllRead(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
   setSaved(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  reactToStory(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  searchArchive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  triageStories(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  reactToStory(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
+  searchArchive(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  triageStories(
+    channelId: string,
+    args: Record<string, unknown>,
+    effects?: NewsEffects,
+  ): Promise<unknown>;
   triageNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  refreshNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  requestDeepDive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  startDeepDive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
-  getOverview(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  refreshNow(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  requestDeepDive(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  startDeepDive(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
+  getOverview(
+    channelId: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
 }
 
 export interface NewsOperationContext {
   handlers: NewsHandlers;
+  effects?: NewsEffects;
 }
 
 export type NewsOperationExposure = "tool" | "method";
@@ -45,10 +131,18 @@ export interface NewsOperation {
   schema: Record<string, unknown>;
   exposure: NewsOperationExposure[];
   needsRecovery?: boolean;
-  run: (ctx: NewsOperationContext, channelId: string, args: Record<string, unknown>) => unknown;
+  run: (
+    ctx: NewsOperationContext,
+    channelId: string,
+    args: Record<string, unknown>,
+  ) => unknown;
 }
 
-const NO_ARGS = { type: "object", properties: {}, additionalProperties: false } as const;
+const NO_ARGS = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const;
 
 export const NEWS_OPERATIONS: NewsOperation[] = [
   {
@@ -65,7 +159,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.addFeed(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.addFeed(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.importOpml,
@@ -78,30 +173,38 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.importOpml(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.importOpml(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.removeFeed,
-    description: "Unsubscribe a feed by feedId or url. Already-ingested articles are kept.",
+    description:
+      "Unsubscribe a feed by feedId or url. Already-ingested articles are kept.",
     schema: {
       type: "object",
       properties: { feedId: { type: "string" }, url: { type: "string" } },
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.removeFeed(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.removeFeed(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.setFeedEnabled,
-    description: "Pause or resume polling a feed without forgetting its configuration.",
+    description:
+      "Pause or resume polling a feed without forgetting its configuration.",
     schema: {
       type: "object",
-      properties: { feedId: { type: "string", minLength: 1 }, enabled: { type: "boolean" } },
+      properties: {
+        feedId: { type: "string", minLength: 1 },
+        enabled: { type: "boolean" },
+      },
       required: ["feedId", "enabled"],
       additionalProperties: false,
     },
     exposure: ["method"],
-    run: (ctx, channelId, args) => ctx.handlers.setFeedEnabled(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.setFeedEnabled(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.followTopic,
@@ -117,7 +220,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.followTopic(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.followTopic(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.unfollowTopic,
@@ -129,7 +233,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.unfollowTopic(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.unfollowTopic(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.setPreferences,
@@ -142,7 +247,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.setPreferences(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.setPreferences(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.listArticles,
@@ -206,18 +312,21 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool"],
-    run: (ctx, channelId, args) => ctx.handlers.publishBriefing(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.publishBriefing(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.getBriefingHistory,
-    description: "Previous briefings with their TLDRs, newest first. limit defaults to 5.",
+    description:
+      "Previous briefings with their TLDRs, newest first. limit defaults to 5.",
     schema: {
       type: "object",
       properties: { limit: { type: "number", minimum: 1, maximum: 50 } },
       additionalProperties: false,
     },
     exposure: ["tool", "method"],
-    run: (ctx, channelId, args) => ctx.handlers.briefingHistory(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.briefingHistory(channelId, args),
   },
   {
     name: NEWS_METHODS.setSchedule,
@@ -233,7 +342,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["method"],
-    run: (ctx, channelId, args) => ctx.handlers.setSchedule(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.setSchedule(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.setBriefingPaused,
@@ -246,7 +356,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["method"],
-    run: (ctx, channelId, args) => ctx.handlers.setBriefingPaused(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.setBriefingPaused(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.markRead,
@@ -254,7 +365,12 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     schema: {
       type: "object",
       properties: {
-        articleIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 200 },
+        articleIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 200,
+        },
       },
       required: ["articleIds"],
       additionalProperties: false,
@@ -272,10 +388,14 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.setSaved,
-    description: "Bookmark (or un-bookmark) an article for the reader's Saved view.",
+    description:
+      "Bookmark (or un-bookmark) an article for the reader's Saved view.",
     schema: {
       type: "object",
-      properties: { articleId: { type: "string", minLength: 1 }, saved: { type: "boolean" } },
+      properties: {
+        articleId: { type: "string", minLength: 1 },
+        saved: { type: "boolean" },
+      },
       required: ["articleId", "saved"],
       additionalProperties: false,
     },
@@ -325,7 +445,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       additionalProperties: false,
     },
     exposure: ["tool"],
-    run: (ctx, channelId, args) => ctx.handlers.triageStories(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.triageStories(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.triageNow,
@@ -350,7 +471,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     },
     exposure: ["method"],
     needsRecovery: true,
-    run: (ctx, channelId, args) => ctx.handlers.reactToStory(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.reactToStory(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.refreshNow,
@@ -376,7 +498,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     },
     exposure: ["method"],
     needsRecovery: true,
-    run: (ctx, channelId, args) => ctx.handlers.requestDeepDive(channelId, args),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.requestDeepDive(channelId, args),
   },
   {
     name: NEWS_METHODS.startDeepDive,
@@ -400,17 +523,20 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.getOverview,
-    description: "Snapshot of feeds, topics, schedule, article counts, and last briefing.",
+    description:
+      "Snapshot of feeds, topics, schedule, article counts, and last briefing.",
     schema: NO_ARGS,
     exposure: ["method"],
-    run: (ctx, channelId, args) => ctx.handlers.getOverview(channelId, record(args)),
+    run: (ctx, channelId, args) =>
+      ctx.handlers.getOverview(channelId, record(args)),
   },
 ];
 
 export function buildOperationIndex(): Map<string, NewsOperation> {
   const index = new Map<string, NewsOperation>();
   for (const op of NEWS_OPERATIONS) {
-    if (index.has(op.name)) throw new Error(`duplicate news operation: ${op.name}`);
+    if (index.has(op.name))
+      throw new Error(`duplicate news operation: ${op.name}`);
     index.set(op.name, op);
   }
   return index;
@@ -421,9 +547,14 @@ export function toolOperations(): NewsOperation[] {
 }
 
 /** Methods advertised on the participant descriptor (UI + agent surfaces). */
-export function advertisedMethods(): Array<{ name: string; description: string }> {
-  return NEWS_OPERATIONS.filter((op) => op.exposure.includes("method")).map((op) => ({
-    name: op.name,
-    description: op.description.split(". ")[0]!,
-  }));
+export function advertisedMethods(): Array<{
+  name: string;
+  description: string;
+}> {
+  return NEWS_OPERATIONS.filter((op) => op.exposure.includes("method")).map(
+    (op) => ({
+      name: op.name,
+      description: op.description.split(". ")[0]!,
+    }),
+  );
 }
