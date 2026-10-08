@@ -139,9 +139,9 @@
     "@workspace/feeds": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@panticonic/pi-ai": "0.99.2-vibestudio.12",
-    "@panticonic/pi-chord": "0.99.2-vibestudio.12",
-    "@panticonic/pi-durable": "0.99.2-vibestudio.12",
+    "@panticonic/pi-ai": "1.1.0-vibestudio.1",
+    "@panticonic/pi-chord": "1.1.0-vibestudio.1",
+    "@panticonic/pi-durable": "1.1.0-vibestudio.1",
     "@workspace/agentic-core": "workspace:*",
     "@vibestudio/rpc": "workspace:*"
   },
