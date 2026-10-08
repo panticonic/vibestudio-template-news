@@ -30,6 +30,15 @@
       ],
       "requests": [
         {
+          "capability": "workspace.dependencies.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "account.profile.update",
           "resource": {
             "kind": "prefix",
