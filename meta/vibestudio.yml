@@ -9,6 +9,7 @@ template:
   description: A news panel, feed tools, and an agent for collecting and briefing news.
   name: News
   repositories:
+    - meta
     - packages/feeds
     - panels/news
     - workers/news-agent
