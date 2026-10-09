@@ -320,6 +320,7 @@ export default function NewsPanel() {
   const clientRef = useRef<PubSubClient | null>(null);
   const dataQueue = useRef<Promise<unknown>>(Promise.resolve());
   const refreshPending = useRef<Promise<void> | null>(null);
+  const refreshRequested = useRef(false);
   const withReaderData = useCallback(
     <T,>(operation: () => Promise<T>): Promise<T> => {
       const pending = dataQueue.current.catch(() => undefined).then(operation);
@@ -427,93 +428,110 @@ export default function NewsPanel() {
 
   const refresh = useCallback(async () => {
     if (!participantId || !channelName) return;
-    if (refreshPending.current) return refreshPending.current;
+    if (refreshPending.current) {
+      refreshRequested.current = true;
+      return refreshPending.current;
+    }
     const pending = withReaderData(async () => {
-      setInbox((current) =>
-        current.status === "idle" ? { ...current, status: "loading" } : current,
-      );
-      try {
-        const [nextOverview, articleResult, savedResult, historyResult] =
-          await Promise.all([
-            callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
-            refreshArticleWindow(
-              inboxRef.current.articles,
-              (cursor) =>
-                callAgent(NEWS_METHODS.listArticles, {
-                  limit: 40,
-                  triagedOnly: true,
-                  ...(cursor ? { cursor } : {}),
-                }) as Promise<{
-                  articles: ArticleRow[];
-                  hasMore?: boolean;
-                  nextCursor?: string;
-                }>,
-            ),
-            savedRef.current.status === "idle"
-              ? Promise.resolve(null)
-              : refreshArticleWindow(
-                  savedRef.current.articles,
-                  (cursor) =>
-                    callAgent(NEWS_METHODS.listArticles, {
-                      limit: 40,
-                      savedOnly: true,
-                      ...(cursor ? { cursor } : {}),
-                    }) as Promise<{
-                      articles: ArticleRow[];
-                      hasMore?: boolean;
-                      nextCursor?: string;
-                    }>,
-                ),
-            callAgent(NEWS_METHODS.getBriefingHistory, {
-              limit: 20,
-            }) as Promise<{
-              briefings: BriefingRow[];
-            }>,
-          ]);
-        setOverview(nextOverview);
-        setInbox({
-          status: "ready",
-          articles: articleResult.articles,
-          hasMore: Boolean(articleResult.hasMore),
-          cursor: articleResult.nextCursor,
-        });
-        if (savedResult)
-          setSaved({
-            status: "ready",
-            articles: savedResult.articles,
-            hasMore: Boolean(savedResult.hasMore),
-            cursor: savedResult.nextCursor,
-          });
-        setBriefings(historyResult.briefings);
-      } catch (error) {
-        const message = errorMessage(error);
-        setInbox((current) => ({
-          ...current,
-          status: "error",
-          error: message,
-        }));
-        setNotice({
-          tone: "red",
-          text: `Could not update the reader: ${message}`,
-        });
-      }
-
-      const probe = modelProbe.current;
-      if (probe) {
+      do {
+        refreshRequested.current = false;
+        setInbox((current) =>
+          current.status === "idle"
+            ? { ...current, status: "loading" }
+            : current,
+        );
         try {
-          setModelConnect(
-            await detectMissingModelCredential(probe.catalog, probe.modelRef),
-          );
-        } catch {
-          /* keep the last known state */
+          const [nextOverview, articleResult, savedResult, historyResult] =
+            await Promise.all([
+              callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
+              refreshArticleWindow(
+                inboxRef.current.articles,
+                (cursor) =>
+                  callAgent(NEWS_METHODS.listArticles, {
+                    limit: 40,
+                    triagedOnly: true,
+                    ...(cursor ? { cursor } : {}),
+                  }) as Promise<{
+                    articles: ArticleRow[];
+                    hasMore?: boolean;
+                    nextCursor?: string;
+                  }>,
+              ),
+              savedRef.current.status === "idle"
+                ? Promise.resolve(null)
+                : refreshArticleWindow(
+                    savedRef.current.articles,
+                    (cursor) =>
+                      callAgent(NEWS_METHODS.listArticles, {
+                        limit: 40,
+                        savedOnly: true,
+                        ...(cursor ? { cursor } : {}),
+                      }) as Promise<{
+                        articles: ArticleRow[];
+                        hasMore?: boolean;
+                        nextCursor?: string;
+                      }>,
+                  ),
+              callAgent(NEWS_METHODS.getBriefingHistory, {
+                limit: 20,
+              }) as Promise<{
+                briefings: BriefingRow[];
+              }>,
+            ]);
+          setOverview(nextOverview);
+          setInbox({
+            status: "ready",
+            articles: articleResult.articles,
+            hasMore: Boolean(articleResult.hasMore),
+            cursor: articleResult.nextCursor,
+          });
+          if (savedResult)
+            setSaved({
+              status: "ready",
+              articles: savedResult.articles,
+              hasMore: Boolean(savedResult.hasMore),
+              cursor: savedResult.nextCursor,
+            });
+          setBriefings(historyResult.briefings);
+        } catch (error) {
+          const message = errorMessage(error);
+          setInbox((current) => ({
+            ...current,
+            status: "error",
+            error: message,
+          }));
+          setNotice({
+            tone: "red",
+            text: `Could not update the reader: ${message}`,
+          });
         }
-      }
+
+        const probe = modelProbe.current;
+        if (probe) {
+          try {
+            setModelConnect(
+              await detectMissingModelCredential(probe.catalog, probe.modelRef),
+            );
+          } catch {
+            /* keep the last known state */
+          }
+        }
+      } while (refreshRequested.current);
     });
     refreshPending.current = pending;
     try {
       await pending;
     } finally {
-      if (refreshPending.current === pending) refreshPending.current = null;
+      if (refreshPending.current === pending) {
+        refreshPending.current = null;
+        // An event can be admitted after the worker's final loop condition but
+        // before this waiter clears the in-flight slot. Hand that invalidation
+        // to a fresh read instead of leaving it recorded against a finished run.
+        if (refreshRequested.current) {
+          refreshRequested.current = false;
+          void refreshRef.current();
+        }
+      }
     }
   }, [
     callAgent,
@@ -530,8 +548,6 @@ export default function NewsPanel() {
   useEffect(() => {
     if (!participantId) return;
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 60_000);
-    return () => window.clearInterval(timer);
   }, [participantId, refresh]);
 
   useEffect(() => {
@@ -549,24 +565,17 @@ export default function NewsPanel() {
     });
     clientRef.current = client;
     let cancelled = false;
-    let refreshTimer: number | null = null;
-    const scheduleRefresh = () => {
-      if (refreshTimer !== null) return;
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = null;
-        void refreshRef.current();
-      }, 500);
-    };
     void (async () => {
       try {
         await client.ready();
+        // Read after the channel connection owns live updates, closing the
+        // admission gap between the initial reader query and subscription.
+        void refreshRef.current();
         for await (const event of client.events({
           includeReplay: true,
           includeSignals: true,
         })) {
           if (cancelled) break;
-          if (typeof event.pubsubId === "number") {
-          }
           if (event.type === "signal") {
             const payload = parseSignalEvent<NewsDeepDiveRequested>(
               event as { content: string; contentType?: string },
@@ -577,7 +586,7 @@ export default function NewsPanel() {
               continue;
             }
           }
-          if (isNewsReaderDataEvent(event)) scheduleRefresh();
+          if (isNewsReaderDataEvent(event)) void refreshRef.current();
         }
       } catch (error) {
         if (!cancelled)
@@ -589,7 +598,6 @@ export default function NewsPanel() {
     })();
     return () => {
       cancelled = true;
-      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       if (clientRef.current === client) clientRef.current = null;
       void client.close();
     };

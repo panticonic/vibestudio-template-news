@@ -199,6 +199,51 @@ it("preserves loaded pages and the selected older story through a live refresh",
   expect(document.querySelectorAll(".news-story")).toHaveLength(7);
   await page.screenshot();
 });
+
+it("keeps a channel invalidation that arrives while a reader refresh is finishing", async () => {
+  render(<NewsPanel />);
+  await screen.findByRole("link", { name: titles[0] });
+  const baselineOverviewReads = fixture.call.mock.calls.filter(
+    ([method]) => method === NEWS_METHODS.getOverview,
+  ).length;
+  const originalCall = fixture.call.getMockImplementation();
+  expect(originalCall).toBeDefined();
+
+  let releaseRefresh: (() => void) | undefined;
+  let markRefreshStarted!: () => void;
+  const refreshStarted = new Promise<void>((resolve) => {
+    markRefreshStarted = resolve;
+  });
+  let blockNextOverview = true;
+  fixture.call.mockImplementation((method, args) => {
+    if (method === NEWS_METHODS.getOverview && blockNextOverview) {
+      blockNextOverview = false;
+      return new Promise((resolve, reject) => {
+        releaseRefresh = () => {
+          void originalCall!(method, args).then(resolve, reject);
+        };
+        markRefreshStarted();
+      });
+    }
+    return originalCall!(method, args);
+  });
+
+  const event = {
+    type: "agentic.trajectory.v1/event",
+    payload: { kind: "custom.updated" },
+  };
+  fixture.emit(event);
+  await refreshStarted;
+  fixture.emit(event);
+  releaseRefresh!();
+
+  await waitFor(() =>
+    expect(
+      fixture.call.mock.calls.filter(([method]) => method === NEWS_METHODS.getOverview),
+    ).toHaveLength(baselineOverviewReads + 2),
+  );
+});
+
 it("retains a Saved story and its action after a rejected unsave", async () => {
   render(<NewsPanel />);
   await screen.findByRole("link", { name: titles[0] });
