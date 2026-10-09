@@ -69,9 +69,13 @@ curator setup card for analyst channels.
 
 ## Schedule settings
 
-Each curator channel stores its cadence: `pollIntervalMs` (at least 1 minute),
-`briefingIntervalMs` (at least 10 minutes), and an optional daily `briefingAt`
-local time (`"HH:MM"`). Change them from the setup card or with `setSchedule`.
+Missions owns each curator channel's polling and briefing schedules.
+Set `pollIntervalMs` (at least 1 minute) independently. For briefings, choose
+`briefingIntervalMs` (at least 10 minutes) or a daily `briefingAt` (`"HH:MM"`)
+with an explicit IANA `timezone`. These are alternative triggers; combining
+an interval with a daily time is rejected before changing either schedule.
+Pass `briefingAt: null` to return to interval scheduling. Change schedules
+from the setup card or with `setSchedule`.
 `setBriefingPaused` pauses scheduled briefings; feed polling and a manual "Brief
 me now" keep working. `refreshNow` polls immediately; with `briefing: true` it
 also runs a briefing without a notification.

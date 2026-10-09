@@ -1903,6 +1903,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         throw new Error("briefingAt must be a valid HH:MM time.");
       minutes = Number(match[1]) * 60 + Number(match[2]);
     }
+    if (minutes !== undefined && briefingIntervalMs !== undefined)
+      throw new Error("Choose either briefingIntervalMs or a daily briefingAt.");
     // Validate user input before provisioning or editing either owner row.
     const requestedTimezone = stringArg(args, "timezone");
     if (requestedTimezone) canonicalCronTimeZone(requestedTimezone);
@@ -1926,11 +1928,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     let trigger: MissionTrigger | undefined;
     if (minutes !== undefined) {
       trigger = dailyTrigger;
-    } else if (requestedTimezone && briefing.charter.trigger.kind === "cron") {
-      trigger = {
-        ...briefing.charter.trigger,
-        timezone: canonicalCronTimeZone(requestedTimezone),
-      };
     } else if (
       briefingIntervalMs !== undefined ||
       args["briefingAt"] === null
@@ -1938,6 +1935,11 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       trigger = {
         kind: "schedule",
         everyMs: briefingIntervalMs ?? DEFAULT_BRIEFING_INTERVAL_MS,
+      };
+    } else if (requestedTimezone && briefing.charter.trigger.kind === "cron") {
+      trigger = {
+        ...briefing.charter.trigger,
+        timezone: canonicalCronTimeZone(requestedTimezone),
       };
     }
     if (pollIntervalMs !== undefined)

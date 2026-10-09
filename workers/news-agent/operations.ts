@@ -334,7 +334,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   {
     name: NEWS_METHODS.setSchedule,
     description:
-      "Reconfigure cadence: pollIntervalMs, briefingIntervalMs, and/or briefingAt ('HH:MM' local anchor for daily briefings; pass null to unanchor).",
+      "Reconfigure polling with pollIntervalMs. Choose either briefingIntervalMs or a daily briefingAt ('HH:MM' in an explicit IANA timezone; pass null to return to interval scheduling).",
     schema: {
       type: "object",
       properties: {

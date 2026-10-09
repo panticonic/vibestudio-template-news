@@ -538,6 +538,38 @@ describe("NewsAgentWorker", () => {
     )).toEqual([]);
   });
 
+  it("rejects contradictory briefing triggers before creating any schedules", async () => {
+    const worker = await makeWorker();
+    await expect(worker.setSchedule("ch-1", {
+      pollIntervalMs: 900_000,
+      briefingIntervalMs: 3_600_000,
+      briefingAt: "08:00",
+      timezone: "Europe/Berlin",
+    })).rejects.toThrow("Choose either briefingIntervalMs or a daily briefingAt");
+    expect(await worker.missionOwner!.callAs(
+      { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+      "list",
+    )).toEqual([]);
+  });
+
+  it("switches a daily briefing to an interval even when a timezone is supplied", async () => {
+    const worker = await makeWorker();
+    await worker.setSchedule("ch-1", {
+      briefingAt: "08:00",
+      timezone: "Europe/Berlin",
+    });
+    expect(await worker.setSchedule("ch-1", {
+      briefingIntervalMs: 3_600_000,
+      timezone: "Europe/Berlin",
+    })).toMatchObject({ briefingIntervalMs: 3_600_000 });
+    const missions = await worker.missionOwner!.callAs<MissionRecord[]>(
+      { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+      "list",
+    );
+    expect(missions.find((m) => m.name === "News briefing")!.charter.trigger)
+      .toEqual({ kind: "schedule", everyMs: 3_600_000 });
+  });
+
   it("seeds product defaults in Missions and preserves owner edits on reopen", async () => {
     const worker = await makeWorker();
     const owner = worker.missionOwner!;
