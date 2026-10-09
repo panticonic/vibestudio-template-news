@@ -19,6 +19,7 @@ const fixture = vi.hoisted(() => ({
   emit: (_event: unknown) => {},
   close: () => {},
   scheduleChanged: (_version: string) => {},
+  scheduleSignal: undefined as AbortSignal | undefined,
 }));
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-reader",
@@ -46,6 +47,7 @@ vi.mock("@workspace/runtime", () => ({
           return { version: "initial" };
         return new Promise((resolve, reject) => {
           const signal = options?.signal;
+          fixture.scheduleSignal = signal;
           const abort = () => reject(signal?.reason);
           signal?.throwIfAborted();
           signal?.addEventListener("abort", abort, { once: true });
@@ -127,6 +129,7 @@ const titles = [
   "Electric ferries cross fjords",
 ];
 beforeEach(() => {
+  fixture.scheduleSignal = undefined;
   rejectSave = false;
   articles = titles.map((title, index) => ({
     articleId: `story-${index}`,
@@ -268,6 +271,26 @@ it("keeps a channel invalidation that arrives while a reader refresh is finishin
       ),
     ).toHaveLength(baselineOverviewReads + 2),
   );
+});
+
+it("refreshes owner schedule changes and cancels the observation on unmount", async () => {
+  const view = render(<NewsPanel />);
+  await screen.findByRole("link", { name: titles[0] });
+  await waitFor(() => expect(fixture.scheduleSignal).toBeDefined());
+  fireEvent.click(screen.getByRole("button", { name: /Load older stories/ }));
+  await screen.findByRole("link", { name: titles[5] });
+  const before = fixture.call.mock.calls.filter(
+    ([method]) => method === NEWS_METHODS.getOverview,
+  ).length;
+  fixture.scheduleChanged("edited");
+  await waitFor(() =>
+    expect(fixture.call.mock.calls.filter(
+      ([method]) => method === NEWS_METHODS.getOverview,
+    ).length).toBeGreaterThan(before),
+  );
+  expect(screen.getByRole("link", { name: titles[5] })).toBeTruthy();
+  view.unmount();
+  expect(fixture.scheduleSignal?.aborted).toBe(true);
 });
 
 it("retains a Saved story and its action after a rejected unsave", async () => {

@@ -529,6 +529,15 @@ async function addExampleFeed(
 }
 
 describe("NewsAgentWorker", () => {
+  it("rejects an unzoned daily briefing before creating any schedules", async () => {
+    const worker = await makeWorker();
+    await expect(worker.setSchedule("ch-1", { briefingAt: "08:00" })).rejects.toThrow();
+    expect(await worker.missionOwner!.callAs(
+      { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+      "list",
+    )).toEqual([]);
+  });
+
   it("seeds product defaults in Missions and preserves owner edits on reopen", async () => {
     const worker = await makeWorker();
     const owner = worker.missionOwner!;
