@@ -24,7 +24,8 @@ export function newsReaderJourney(feedUrl: string) {
         "panels/news",
         async (handle) => {
           await waitForText(handle, "Add source", { timeoutMs: 120_000 });
-          const page = await handle.cdp.page();
+          const session = await handle.cdp.session();
+          const page = session.page;
           const source = page.getByRole("textbox", {
             name: "Site or feed URL",
           });
@@ -62,8 +63,8 @@ export function newsReaderJourney(feedUrl: string) {
           const identity = await handle.stateArgs.get<Record<string, string>>();
           await handle.reload();
           await waitForText(handle, first);
-          const reopened = await handle.cdp.page();
-          await reopened
+          // The stable session page binds the reloaded renderer itself.
+          await page
             .getByRole("radio", { name: "Saved", exact: true })
             .click();
           await waitForText(handle, second);
@@ -77,7 +78,7 @@ export function newsReaderJourney(feedUrl: string) {
             restoredIdentity["agentKey"],
             "same reader agent after reload",
           ).toBe(identity["agentKey"]);
-          await reopened
+          await page
             .getByRole("button", { name: `Remove ${second}`, exact: true })
             .click();
           await waitForText(handle, "Nothing saved yet");
@@ -88,7 +89,7 @@ export function newsReaderJourney(feedUrl: string) {
               `reader layout at ${width}`,
             ).toBe(false);
           }
-          await reopened
+          await page
             .getByRole("textbox", { name: "Search your news" })
             .fill(
               "An intentionally long literal search query that does not match either fixed story",

@@ -342,7 +342,7 @@ export default function NewsPanel() {
   );
 
   useEffect(() => {
-    void panel.stateArgs.set({ lastVisitAt: Date.now() });
+    void panel.stateArgs.patch({ lastVisitAt: Date.now() });
   }, []);
 
   useEffect(() => {
@@ -355,7 +355,7 @@ export default function NewsPanel() {
         const channel = stateArgs.channelName ?? newsChannelName(contextId);
         const agentKey = stateArgs.agentKey ?? newsAgentKey(contextId);
         if (!stateArgs.channelName || !stateArgs.agentKey) {
-          await panel.stateArgs.set({ channelName: channel, agentKey });
+          await panel.stateArgs.patch({ channelName: channel, agentKey });
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
 

@@ -21,7 +21,7 @@ vi.mock("@workspace/runtime", () => ({
   openPanel: vi.fn(),
   panel: {
     stateArgs: {
-      set: (args: Record<string, unknown>) =>
+      patch: (args: Record<string, unknown>) =>
         args["channelName"] ? fixture.persistChannel() : Promise.resolve(),
     },
   },

@@ -29,7 +29,7 @@ vi.mock("@workspace/runtime", () => ({
   },
   credentials: { listStoredCredentials: async () => [] },
   openPanel: vi.fn(),
-  panel: { stateArgs: { set: vi.fn(async () => undefined) } },
+  panel: { stateArgs: { patch: vi.fn(async () => undefined) } },
   rpc: {
     selfId: "reader-panel",
     call: async () => ({ defaultModel: "openai-codex:gpt-6-luna" }),
@@ -197,9 +197,7 @@ it("preserves loaded pages and the selected older story through a live refresh",
     document.querySelector('.news-story[data-selected="true"]')?.textContent,
   ).toContain(titles[4]);
   expect(document.querySelectorAll(".news-story")).toHaveLength(7);
-  await page.screenshot({
-    path: "/home/werg/vibestudio/.cache/template-review/template-ui-news-390.png",
-  });
+  await page.screenshot();
 });
 it("retains a Saved story and its action after a rejected unsave", async () => {
   render(<NewsPanel />);

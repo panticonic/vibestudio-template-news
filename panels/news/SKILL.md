@@ -5,69 +5,73 @@ description: Agentic news aggregation in three tiers — deterministic feed poll
 
 # News
 
-Agentic news aggregation in three tiers:
+News aggregation runs in three tiers:
 
-- **Tier 1 — poll** (deterministic, zero tokens): the `workers/news-agent`
-  Durable Object polls RSS/Atom/JSON feeds, dedupes, and stores items.
-- **Tier 1.5 — triage** (agent, light): `runTriage` batches un-triaged items
-  into a `news_triage` turn that categorizes, clusters same-event coverage,
-  one-line-summarizes, and drops noise. The reader only shows triaged items
-  (`listArticles triagedOnly`), so nothing raw/un-curated surfaces. Each tool
-  result schedules the next batch until the durable backlog is empty; the
-  panel only starts or retries that worker-owned drain.
-- **Tier 2 — briefing** (agent, deep): a scheduled/cold-start briefing turn
-  web-searches followed topics, reads the top stories, and publishes a
+- **Tier 1, poll** (deterministic, no tokens): the `workers/news-agent`
+  Durable Object polls RSS/Atom/JSON feeds, removes duplicates, and stores
+  items.
+- **Tier 1.5, triage** (light agent work): `runTriage` batches items that
+  haven't been triaged into a `news_triage` turn. The turn categorizes them,
+  clusters coverage of the same event, writes one-line summaries, and drops
+  noise. The reader shows only triaged items (`listArticles triagedOnly`), so
+  nothing raw or uncurated appears. Each tool result schedules the next batch
+  until the stored backlog is empty. The worker runs this drain; the panel only
+  starts or retries it.
+- **Tier 2, briefing** (deep agent work): a scheduled or cold-start briefing
+  turn web-searches followed topics, reads the top stories, and publishes a
   structured TLDR briefing card. A manual "Brief me now" runs the same turn
-  silently (scheduled runs fire a "ready" notification).
+  without a notification; scheduled runs send a "ready" notification.
 
 ## Pieces
 
-- **Worker**: `workers/news-agent` (`NewsAgentWorker`) — per-channel feeds,
-  followed topics, articles (deduped by canonical-URL sha256), briefings, and
-  a `RecurringScheduler` driving `poll:{channelId}` / `briefing:{channelId}`
-  jobs off the single DO alarm.
-- **Panel**: `panels/news` — a reader-first UI with Inbox, Saved, Briefings,
+- **Worker**: `workers/news-agent` (`NewsAgentWorker`) stores per-channel
+  feeds, followed topics, articles (deduplicated by the sha256 of the
+  canonical URL), and briefings.
+- **Panel**: `panels/news` is a reader-first UI with Inbox, Saved, Briefings,
   archive search, cursor pagination, explicit request states, a first-run
-  source picker, and one canonical settings dialog. `AgenticChat` is mounted
-  only when the user opens the assistant drawer. It resolves the
-  workspace-configured model and subscribes the agent with it. Story "Explore"
-  forks the channel via `@workspace/channel-fork` (cloning the agent DO),
-  requires `startDeepDive` to succeed on the News clone, and only then opens a
-  focused analysis chat.
+  source picker, and a single settings dialog. `AgenticChat` mounts only when
+  the user opens the assistant drawer; it resolves the workspace-configured
+  model and subscribes the agent with it. A story's "Explore" action forks the
+  channel with `@workspace/channel-fork` (cloning the agent DO), calls
+  `startDeepDive` on the News clone, and opens a focused analysis chat only if
+  that call succeeds.
 - **Renderers** (this skill): `renderers/news-briefing.tsx` and
-  `renderers/news-setup.tsx`, registered as `news.briefing` / `news.setup`
-  message types by the agent on subscribe.
-- **Shared package**: `@workspace/feeds` — feed parsing, URL canonicalization,
-  conditional polite fetching, recency scoring, and the card-state contracts
-  (`@workspace/feeds/card-types`).
+  `renderers/news-setup.tsx`. The agent registers them as the `news.briefing`
+  and `news.setup` message types when it subscribes.
+- **Shared package**: `@workspace/feeds` provides feed parsing, URL
+  canonicalization, polite conditional fetching, recency scoring, and the card
+  state types (`@workspace/feeds/card-types`).
 
 ## Agent surface
 
-One operations table (`workers/news-agent/operations.ts`) drives the model
-tools, `onMethodCall` methods, and the participant descriptor: `news_add_feed`,
-`news_import_opml`, `news_remove_feed`, `news_follow_topic`,
-`news_unfollow_topic`, `news_set_preferences`, `news_list_articles`,
-`news_publish_briefing`, `news_get_briefing_history`, plus method-only
-`setSchedule`, `markRead`, `markAllRead`, `setSaved`, `searchArchive`,
-`refreshNow`, `requestDeepDive`, `getOverview`, `setFeedEnabled`.
-`listArticles` is the canonical cursor-paginated reader query. `startDeepDive`
-is a channel method the panel calls on a freshly-cloned agent after forking.
+A single operations table (`workers/news-agent/operations.ts`) generates the
+model tools, the `onMethodCall` methods, and the participant descriptor:
+
+- Tools and methods: `news_add_feed`, `news_import_opml`, `news_remove_feed`,
+  `news_follow_topic`, `news_unfollow_topic`, `news_set_preferences`,
+  `news_list_articles`, `news_get_briefing_history`.
+- Tools only: `news_publish_briefing`, `news_triage`.
+- Methods only: `setFeedEnabled`, `setSchedule`, `setBriefingPaused`,
+  `markRead`, `markAllRead`, `setSaved`, `searchArchive`, `triageNow`,
+  `reactToStory`, `refreshNow`, `requestDeepDive`, `startDeepDive`,
+  `getOverview`.
+
+`listArticles` is the cursor-paginated query the reader uses. `startDeepDive`
+is a channel method the panel calls on the newly cloned agent after forking.
 
 ## Channel modes
 
-A channel is either `curator` (a normal personal news channel: polls feeds,
-publishes the setup card, runs briefings) or `analyst` (a deep-dive fork:
-focused on one story, no polling/setup/onboarding). `postClone` marks forks as
-`analyst` and strips the parent channel's copied jobs/state; `subscribeChannel`
-skips curator bootstrap for analyst channels.
+A channel is either `curator` (a normal personal news channel that polls feeds,
+publishes the setup card, and runs briefings) or `analyst` (a deep-dive fork
+focused on one story, with no polling, setup, or onboarding).
+`onChannelForked` marks forks as `analyst`, and channel preparation skips the
+curator setup card for analyst channels.
 
-## Standing schedules
+## Schedule settings
 
-Per-channel cadence is DO-internal and automatic — each curator channel's
-`RecurringScheduler` drives its own `poll:` / `briefing:` jobs (configure via
-the setup card or `setSchedule`); a self-canceling `watchdog:` job flips a
-stalled briefing to error within minutes. Workspace-level standing jobs are
-**optional** and can be declared in `meta/vibestudio.yml` under `recurring:`
-(approval-gated) to drive a specific pinned agent instance by objectKey; the
-agent exposes `runScheduledJob({ job: "poll" | "briefing" })` for that path
-(it skips analyst channels).
+Each curator channel stores its cadence: `pollIntervalMs` (at least 1 minute),
+`briefingIntervalMs` (at least 10 minutes), and an optional daily `briefingAt`
+local time (`"HH:MM"`). Change them from the setup card or with `setSchedule`.
+`setBriefingPaused` pauses scheduled briefings; feed polling and a manual "Brief
+me now" keep working. `refreshNow` polls immediately; with `briefing: true` it
+also runs a briefing without a notification.
