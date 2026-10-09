@@ -28,6 +28,12 @@
     ],
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.missions.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -111,6 +117,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace-service:missions",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "prefix",
@@ -143,9 +158,12 @@
     "@panticonic/pi-chord": "1.1.0-vibestudio.1",
     "@panticonic/pi-durable": "1.1.0-vibestudio.1",
     "@workspace/agentic-core": "workspace:*",
-    "@vibestudio/rpc": "workspace:*"
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/automation": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "@workspace-workers/missions": "workspace:*",
+    "@vibestudio/durable": "workspace:*"
   }
 }

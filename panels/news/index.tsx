@@ -1,4 +1,5 @@
 import { OperationNotice } from "@workspace/ui/feedback";
+import { createMissionsClient } from "@vibestudio/automation/mission";
 /**
  * News — a reader-first personal briefing app.
  *
@@ -147,6 +148,7 @@ interface SearchState {
 interface Notice {
   tone: "red" | "green" | "blue";
   text: string;
+  retry?: () => void;
 }
 
 interface DeepDiveStory {
@@ -227,7 +229,11 @@ async function ensureAgentSubscribed(input: {
     key: input.agentKey,
     channelId: input.channelId,
     contextId: input.contextId,
-    config: { handle: NEWS_AGENT_HANDLE, ...(input.config ?? {}) },
+    config: {
+      handle: NEWS_AGENT_HANDLE,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ...(input.config ?? {}),
+    },
     replay: true,
   });
   if (!subscription.participantId)
@@ -309,6 +315,8 @@ export default function NewsPanel() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [scheduleObservationAttempt, setScheduleObservationAttempt] =
+    useState(0);
   const [triageError, setTriageError] = useState<string | null>(null);
   const [modelConnect, setModelConnect] = useState<{
     providerId: string;
@@ -621,6 +629,39 @@ export default function NewsPanel() {
     },
     [callAgent, refresh],
   );
+
+  useEffect(() => {
+    if (!participantId) return;
+    const controller = new AbortController();
+    const missions = createMissionsClient(rpc);
+    void (async () => {
+      try {
+        let current = await missions.observeChanges({
+          signal: controller.signal,
+        });
+        await refreshRef.current();
+        while (!controller.signal.aborted) {
+          current = await missions.observeChanges({
+            afterVersion: current.version,
+            signal: controller.signal,
+          });
+          await refreshRef.current();
+        }
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setNotice({
+            tone: "red",
+            text: `Schedule updates paused: ${errorMessage(error)}`,
+            retry: () => {
+              setNotice(null);
+              setScheduleObservationAttempt((attempt) => attempt + 1);
+            },
+          });
+      }
+    })();
+    return () =>
+      controller.abort(new Error("News reader schedule observation closed"));
+  }, [participantId, scheduleObservationAttempt]);
 
   useEffect(() => {
     const pending = overview?.untriagedCount ?? 0;
@@ -1285,14 +1326,25 @@ export default function NewsPanel() {
                               : "info"
                         }
                         actions={
-                          <IconButton
-                            size="1"
-                            variant="ghost"
-                            aria-label="Dismiss message"
-                            onClick={() => setNotice(null)}
-                          >
-                            <Cross2Icon />
-                          </IconButton>
+                          <Flex gap="2" align="center">
+                            {notice.retry ? (
+                              <Button
+                                size="1"
+                                variant="ghost"
+                                onClick={notice.retry}
+                              >
+                                Retry updates
+                              </Button>
+                            ) : null}
+                            <IconButton
+                              size="1"
+                              variant="ghost"
+                              aria-label="Dismiss message"
+                              onClick={() => setNotice(null)}
+                            >
+                              <Cross2Icon />
+                            </IconButton>
+                          </Flex>
                         }
                       >
                         {notice.text}

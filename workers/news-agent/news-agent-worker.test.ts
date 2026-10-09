@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { rpcMethodAuthority, type RpcClient } from "@vibestudio/rpc";
+import { createTestDO as createMissionOwner } from "@vibestudio/durable/test-utils";
+import { MissionsDO } from "@workspace-workers/missions";
+import type { MissionRecord } from "@vibestudio/automation/mission";
 import { createNativeVesselTestDO as createTestDO } from "@workspace/agentic-do/testing/native-vessel";
 import { createNativeChannelProvider } from "@workspace/agentic-do/testing/native-channel-provider";
 import { createModels, fauxProvider } from "@panticonic/pi-ai";
@@ -22,6 +25,16 @@ const resources: Array<{
   instance: TestNewsAgentWorker;
   db: { close(): void };
 }> = [];
+const missionResources: Array<
+  Awaited<ReturnType<typeof createMissionOwner<MissionsDO>>>
+> = [];
+const missionPolicy = {
+  schemaVersion: 2 as const,
+  digest: "a".repeat(64),
+  artifactRef: `authority-plan:${"a".repeat(64)}` as const,
+  compilerVersion: "test",
+  catalogDigest: "b".repeat(64),
+};
 afterEach(async () => {
   const results = await Promise.allSettled(
     resources.map(({ instance }) =>
@@ -42,6 +55,18 @@ afterEach(async () => {
   }
   for (const result of results)
     if (result.status === "rejected") throw result.reason;
+  for (const owner of missionResources.splice(0)) {
+    try {
+      await owner.instance.releaseForLifecycle({
+        epoch: "test-end",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 0,
+      });
+    } finally {
+      owner.db.close();
+    }
+  }
 });
 import type { Fetcher } from "@workspace/feeds";
 import { articleId } from "@workspace/feeds";
@@ -70,6 +95,9 @@ function rss(
 }
 
 class TestNewsAgentWorker extends NewsAgentWorker {
+  missionOwner: Awaited<
+    ReturnType<typeof createMissionOwner<MissionsDO>>
+  > | null = null;
   // Genuine ChannelDO fixture deliveries use the trusted host RPC boundary.
   protected override get rpcCallerKind(): string | null {
     return "server";
@@ -178,14 +206,26 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 
   rpcCall = vi.fn(
     async (
-      _target: string,
+      target: string,
       method: string,
       args?: unknown[],
       _options?: import("@vibestudio/rpc").RpcCallOptions,
     ): Promise<unknown> => {
       if (method === "runtime.resolveContext") return "ctx-1";
       if (method === "workers.resolveService") {
+        if (args?.[0] === "vibestudio.missions.v1")
+          return { kind: "durable-object", targetId: "do:missions:test" };
         return { kind: "durable-object", targetId: "do:channel:test" };
+      }
+      if (method === "authority.compileAuthorityPlan") return missionPolicy;
+      if (target === "do:missions:test") {
+        if (!this.missionOwner)
+          throw new Error("Mission owner is not installed");
+        return this.missionOwner.callAs(
+          { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+          method,
+          ...(args ?? []),
+        );
       }
       if (method === "workspace.getAgentsMd") return "";
       if (method === "workspace.listSkills") return [];
@@ -444,15 +484,33 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 }
 
 async function makeWorker() {
+  const missionOwner = await createMissionOwner(MissionsDO, {
+    WORKER_SOURCE: "workers/missions",
+    WORKER_CLASS_NAME: "MissionsDO",
+    __objectKey: "news-test-missions",
+  });
+  missionResources.push(missionOwner);
+  Object.defineProperty(missionOwner.instance, "rpc", {
+    value: {
+      call: async (_target: string, method: string) => {
+        if (method === "authority.verifyAuthorityPlan") return missionPolicy;
+        if (method.startsWith("workspace-state.")) return undefined;
+        throw new Error(`Unexpected mission owner RPC ${method}`);
+      },
+    },
+  });
   const resource = await createTestDO(TestNewsAgentWorker, {
     WORKER_SOURCE: "workers/news-agent",
     WORKER_CLASS_NAME: "NewsAgentWorker",
     WORKER_EXECUTION_DIGEST: "e".repeat(64),
+    WORKER_EFFECTIVE_VERSION: "e".repeat(64),
+    WORKER_SOURCE_REF: `state:${"d".repeat(64)}`,
     WORKERD_SESSION_ID: "test-session",
     WORKERD_BOOT_GENERATION: "1",
   });
   resources.push(resource);
   const worker = resource.instance as TestNewsAgentWorker;
+  worker.missionOwner = missionOwner;
   worker.seedSubscription();
   return worker;
 }
@@ -471,8 +529,108 @@ async function addExampleFeed(
 }
 
 describe("NewsAgentWorker", () => {
+  it("seeds product defaults in Missions and preserves owner edits on reopen", async () => {
+    const worker = await makeWorker();
+    const owner = worker.missionOwner!;
+    const user = {
+      callerId: "panel:alice",
+      callerKind: "panel" as const,
+      userId: "alice",
+    };
+    expect(await worker.setSchedule("ch-1", {})).toMatchObject({
+      pollIntervalMs: 30 * 60_000,
+      briefingIntervalMs: 24 * 3_600_000,
+      briefingPaused: false,
+    });
+    const defaults = await owner.callAs<MissionRecord[]>(user, "list");
+    const defaultPoll = defaults.find((m) => m.name === "Refresh News")!;
+    const defaultBriefing = defaults.find((m) => m.name === "News briefing")!;
+    expect(defaultPoll.charter.trigger).toEqual({
+      kind: "schedule",
+      everyMs: 30 * 60_000,
+    });
+    expect(defaultBriefing.charter.trigger).toEqual({
+      kind: "schedule",
+      everyMs: 24 * 3_600_000,
+    });
+    expect(defaultPoll.state).toBe("active");
+    expect(defaultBriefing.state).toBe("active");
+
+    expect(
+      await worker.setSchedule("ch-1", {
+        pollIntervalMs: 900_000,
+        briefingAt: "08:00",
+        timezone: "Europe/Berlin",
+      }),
+    ).toMatchObject({
+      pollIntervalMs: 900_000,
+      briefingAtMinutes: 480,
+      timezone: "Europe/Berlin",
+      briefingPaused: false,
+    });
+    const missions = await owner.callAs<MissionRecord[]>(user, "list");
+    expect(missions).toHaveLength(2);
+    const poll = missions.find((m) => m.name === "Refresh News")!;
+    const briefing = missions.find((m) => m.name === "News briefing")!;
+    expect(poll.charter.execution).toMatchObject({
+      kind: "agent",
+      action: { kind: "tool", tool: "refreshNow", args: { briefing: false } },
+      conversation: { mode: "continue", channelId: "ch-1", contextId: "ctx-1" },
+    });
+    expect(briefing.charter.trigger).toEqual({
+      kind: "cron",
+      expression: "0 8 * * *",
+      timezone: "Europe/Berlin",
+    });
+    await owner.callAs(user, "edit", poll.missionId, {
+      charter: {
+        ...poll.charter,
+        trigger: { kind: "schedule", everyMs: 1_200_000 },
+      },
+    });
+    await owner.callAs(user, "pause", briefing.missionId);
+    await worker.subscribeChannel({
+      channelId: "ch-1",
+      contextId: "ctx-1",
+    } as never);
+    expect(await worker.setSchedule("ch-1", {})).toMatchObject({
+      pollIntervalMs: 1_200_000,
+      briefingPaused: true,
+    });
+    expect(await worker.getOverview("ch-1", {})).toMatchObject({
+      setup: {
+        pollIntervalMs: 1_200_000,
+        briefingPaused: true,
+        timezone: "Europe/Berlin",
+      },
+    });
+    expect(await owner.callAs(user, "list")).toHaveLength(2);
+  });
+
   it("declares the one current schema for this system epoch", () => {
     expect(NewsAgentWorker.schemaVersion).toBe(1);
+  });
+
+  it("admits an initial pause directly in the owner record without an active schedule window", async () => {
+    const worker = await makeWorker();
+    const original = worker.rpcCall.getMockImplementation()!;
+    const admissions: MissionRecord[] = [];
+    worker.rpcCall.mockImplementation(async (target, method, args, options) => {
+      const result = await original(target, method, args, options);
+      if (method === "provisionDefault")
+        admissions.push(result as MissionRecord);
+      return result;
+    });
+    await worker.setBriefingPaused("ch-1", { paused: true });
+    await worker.setBriefingPaused("ch-1", { paused: true });
+    const briefing = admissions.find((m) => m.name === "News briefing")!;
+    expect(briefing).toMatchObject({ state: "paused", runCount: 0 });
+    expect(briefing.nextRunAt).toBeUndefined();
+    await worker.setBriefingPaused("ch-1", { paused: false });
+    await worker.setBriefingPaused("ch-1", { paused: false });
+    expect(await worker.getOverview("ch-1", {})).toMatchObject({
+      setup: { briefingPaused: false },
+    });
   });
 
   it("keeps every channel-scoped news operation off the direct RPC plane", async () => {
@@ -1278,6 +1436,31 @@ describe("NewsAgentWorker", () => {
     });
   });
 
+  it("retains a poll failure when publishing its status card also fails", async () => {
+    const worker = await makeWorker();
+    const pollFailure = new Error("poll operation failed");
+    const cardFailure = new Error("status publication failed");
+    Object.defineProperty(worker, "syncEngine", {
+      value: {
+        pollChannel: async () => {
+          throw pollFailure;
+        },
+      },
+    });
+    worker.failNextPublication = cardFailure;
+    const runPoll = (
+      worker as unknown as {
+        runPoll(channelId: string): Promise<void>;
+      }
+    ).runPoll.bind(worker);
+
+    await expect(runPoll("ch-1")).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: [pollFailure, cardFailure],
+      cause: pollFailure,
+    });
+  });
+
   it("importOpml bulk-adds the feeds it can validate", async () => {
     const worker = await makeWorker();
     const goodA = "https://example.com/a.xml";
@@ -1366,6 +1549,7 @@ describe("NewsAgentWorker", () => {
       "setSchedule",
       {
         briefingAt: "08:00",
+        timezone: "Europe/Berlin",
       },
     );
     expect(record(schedule.result)["briefingAtMinutes"]).toBe(480);
@@ -1606,8 +1790,8 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     worker.seedSubscription("an-1", "agent-an");
     worker.execSqlForTest(
-      `INSERT INTO news_channel_state (channel_id, poll_interval_ms, briefing_interval_ms, setup_status, mode)
-       VALUES ('an-1', 1800000, 86400000, 'configured', 'analyst')`,
+      `INSERT INTO news_channel_state (channel_id, setup_status, mode)
+       VALUES ('an-1', 'configured', 'analyst')`,
     );
 
     await worker.subscribeChannel({

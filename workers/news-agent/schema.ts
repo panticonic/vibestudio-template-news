@@ -5,9 +5,6 @@ export function createNewsTables(sql: SqlStorage): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS news_channel_state (
       channel_id TEXT PRIMARY KEY,
-      poll_interval_ms INTEGER NOT NULL,
-      briefing_interval_ms INTEGER NOT NULL,
-      briefing_at_minutes INTEGER,
       top_k INTEGER NOT NULL DEFAULT 12,
       setup_status TEXT NOT NULL DEFAULT 'needs-user-preferences',
       preferences_text TEXT,
@@ -20,10 +17,7 @@ export function createNewsTables(sql: SqlStorage): void {
       mode TEXT NOT NULL DEFAULT 'curator',
       -- JSON array of capped reader feedback signals (👍/👎/mute) folded into
       -- each briefing prompt so curation visibly learns from taps.
-      feedback_json TEXT,
-      -- 1 → scheduled/cold-start briefings are paused ("vacation"); manual
-      -- "Brief me now" and feed polling still run.
-      briefing_paused INTEGER NOT NULL DEFAULT 0
+      feedback_json TEXT
     )
   `);
   sql.exec(`

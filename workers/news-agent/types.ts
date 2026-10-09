@@ -23,10 +23,6 @@ export interface FeedbackSignal {
 
 export interface NewsChannelState {
   channelId: string;
-  pollIntervalMs: number;
-  briefingIntervalMs: number;
-  /** Local-time anchor (minutes after midnight) for daily briefings. */
-  briefingAtMinutes?: number;
   topK: number;
   setupStatus: "needs-user-preferences" | "configured";
   preferencesText?: string;
@@ -37,8 +33,6 @@ export interface NewsChannelState {
   mode: NewsChannelMode;
   /** Raw JSON of FeedbackSignal[] (parsed on demand). */
   feedbackJson?: string;
-  /** Scheduled briefings paused ("vacation"); manual briefing still works. */
-  briefingPaused: boolean;
 }
 
 export function record(value: unknown): Record<string, unknown> {

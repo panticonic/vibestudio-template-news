@@ -30,7 +30,11 @@ export interface NewsStoryRef {
 
 // ── Briefing card ───────────────────────────────────────────────────────────
 
-export type NewsBriefingStatus = "collecting" | "summarizing" | "ready" | "error";
+export type NewsBriefingStatus =
+  | "collecting"
+  | "summarizing"
+  | "ready"
+  | "error";
 
 export interface NewsBriefingCardState {
   briefingId: string;
@@ -73,10 +77,11 @@ export interface NewsSetupCardState {
   followedTopics: NewsTopicInfo[];
   /** Human-readable, e.g. "polls every 30m, briefing daily at 08:00". */
   scheduleSummary: string;
-  pollIntervalMs: number;
-  briefingIntervalMs: number;
+  pollIntervalMs?: number;
+  briefingIntervalMs?: number;
   /** Local-time anchor for daily briefings (minutes after midnight), when set. */
   briefingAtMinutes?: number;
+  timezone?: string;
   /** Scheduled briefings paused ("vacation"); manual briefing still works. */
   briefingPaused?: boolean;
   preferencesText?: string;
@@ -172,10 +177,11 @@ export const NEWS_SETUP_STATE_SCHEMA: Record<string, unknown> = {
     pollIntervalMs: { type: "number" },
     briefingIntervalMs: { type: "number" },
     briefingAtMinutes: { type: "number" },
+    timezone: { type: "string" },
     briefingPaused: { type: "boolean" },
     preferencesText: { type: "string" },
     lastRunAt: { type: "string" },
     lastError: { type: "string" },
   },
-  required: ["status", "feeds", "pollIntervalMs"],
+  required: ["status", "feeds"],
 };

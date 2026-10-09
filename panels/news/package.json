@@ -26,6 +26,10 @@
         {
           "protocol": "vibestudio.models.v1",
           "availability": "required"
+        },
+        {
+          "protocol": "vibestudio.missions.v1",
+          "availability": "required"
         }
       ],
       "requests": [
@@ -194,7 +198,8 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^9.1.0",
     "remark-gfm": "^4.0.1",
-    "@workspace/testkit": "workspace:*"
+    "@workspace/testkit": "workspace:*",
+    "@vibestudio/automation": "workspace:*"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

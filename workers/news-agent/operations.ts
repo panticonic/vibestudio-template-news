@@ -2,6 +2,7 @@ import type { CardManager } from "@workspace/agentic-do";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { Fetcher } from "@workspace/feeds";
 import type { NewsCards } from "./cards.js";
+import type { AgentProductMetadata } from "@workspace/agentic-core/agent-product-metadata";
 
 export interface NewsEffects {
   cards: NewsCards;
@@ -9,6 +10,7 @@ export interface NewsEffects {
   rpc: RpcClient;
   fetcher: Fetcher;
   signal?: AbortSignal;
+  metadata?: AgentProductMetadata;
 }
 
 import { record } from "./types.js";
@@ -103,6 +105,7 @@ export interface NewsHandlers {
   refreshNow(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown>;
   requestDeepDive(
     channelId: string,
@@ -338,6 +341,10 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
         pollIntervalMs: { type: "number", minimum: 60_000 },
         briefingIntervalMs: { type: "number", minimum: 600_000 },
         briefingAt: { type: ["string", "null"] },
+        timezone: {
+          type: "string",
+          description: "IANA timezone for a daily briefing.",
+        },
       },
       additionalProperties: false,
     },
@@ -483,8 +490,9 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       properties: { briefing: { type: "boolean" } },
       additionalProperties: false,
     },
-    exposure: ["method"],
-    run: (ctx, channelId, args) => ctx.handlers.refreshNow(channelId, args),
+    exposure: ["tool", "method"],
+    run: (ctx, channelId, args) =>
+      ctx.handlers.refreshNow(channelId, args, ctx.effects),
   },
   {
     name: NEWS_METHODS.requestDeepDive,

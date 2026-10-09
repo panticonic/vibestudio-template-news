@@ -684,6 +684,9 @@ export function SettingsContent({
                 settle(
                   action(NEWS_METHODS.setSchedule, {
                     briefingAt: event.target.value,
+                    timezone:
+                      setup.timezone ??
+                      Intl.DateTimeFormat().resolvedOptions().timeZone,
                   }),
                 );
             }}

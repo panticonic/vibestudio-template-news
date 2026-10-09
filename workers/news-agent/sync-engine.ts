@@ -33,6 +33,12 @@ export interface PollResult {
   newArticles: number;
 }
 
+export interface PollOptions {
+  force?: boolean;
+  fetcher?: Fetcher;
+  signal?: AbortSignal;
+}
+
 /**
  * Tier 1 of the two-tier pipeline: deterministic feed ingestion. Fetch due
  * feeds with conditional GETs, parse, canonicalize, dedupe into SQLite, and
@@ -43,27 +49,40 @@ export class NewsSyncEngine {
 
   constructor(private readonly deps: NewsSyncEngineDeps) {}
 
-  async pollChannel(channelId: string, opts?: { force?: boolean }): Promise<PollResult> {
+  async pollChannel(
+    channelId: string,
+    opts?: PollOptions,
+  ): Promise<PollResult> {
+    opts?.signal?.throwIfAborted();
     const now = this.deps.now();
-    const result: PollResult = { feedsPolled: 0, feedsFailed: 0, newArticles: 0 };
+    const result: PollResult = {
+      feedsPolled: 0,
+      feedsFailed: 0,
+      newArticles: 0,
+    };
     const feeds = this.deps.sql
       .exec(
         `SELECT feed_id, url, title, etag, last_modified, fail_count, backoff_until
          FROM news_feeds WHERE channel_id = ? AND enabled = 1`,
-        channelId
+        channelId,
       )
       .toArray();
     for (const feed of feeds) {
+      opts?.signal?.throwIfAborted();
       const backoffUntil = Number(feed["backoff_until"] ?? 0);
       if (!opts?.force && backoffUntil > now) continue;
       result.feedsPolled += 1;
-      const added = await this.pollFeed(channelId, {
-        feedId: String(feed["feed_id"]),
-        url: String(feed["url"]),
-        etag: (feed["etag"] as string | null) ?? undefined,
-        lastModified: (feed["last_modified"] as string | null) ?? undefined,
-        failCount: Number(feed["fail_count"] ?? 0),
-      });
+      const added = await this.pollFeed(
+        channelId,
+        {
+          feedId: String(feed["feed_id"]),
+          url: String(feed["url"]),
+          etag: (feed["etag"] as string | null) ?? undefined,
+          lastModified: (feed["last_modified"] as string | null) ?? undefined,
+          failCount: Number(feed["fail_count"] ?? 0),
+        },
+        opts,
+      );
       if (added === null) result.feedsFailed += 1;
       else result.newArticles += added;
     }
@@ -71,7 +90,7 @@ export class NewsSyncEngine {
       `DELETE FROM news_articles
        WHERE channel_id = ? AND saved = 0 AND briefed_in IS NULL AND fetched_at < ?`,
       channelId,
-      now - ARTICLE_RETENTION_MS
+      now - ARTICLE_RETENTION_MS,
     );
     return result;
   }
@@ -79,28 +98,43 @@ export class NewsSyncEngine {
   /** Returns new-article count, or null on fetch/parse failure (backoff applied). */
   private async pollFeed(
     channelId: string,
-    feed: { feedId: string; url: string; etag?: string; lastModified?: string; failCount: number }
+    feed: {
+      feedId: string;
+      url: string;
+      etag?: string;
+      lastModified?: string;
+      failCount: number;
+    },
+    opts?: PollOptions,
   ): Promise<number | null> {
     const now = this.deps.now();
     const waitMs = this.politeness.delayFor(feed.url, now);
     if (waitMs > 0) {
       const sleep =
         this.deps.sleep ??
-        ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+        ((ms: number) =>
+          new Promise<void>((resolve) => setTimeout(resolve, ms)));
       await sleep(waitMs);
     }
+    opts?.signal?.throwIfAborted();
 
     const fetched = await fetchFeed(feed.url, {
       etag: feed.etag,
       lastModified: feed.lastModified,
-      fetcher: this.deps.fetcher,
+      fetcher: opts?.fetcher ?? this.deps.fetcher,
     });
+    opts?.signal?.throwIfAborted();
     if (fetched.status === "not-modified") {
       this.markFeedOk(channelId, feed.feedId, { status: "not-modified" });
       return 0;
     }
     if (fetched.status === "error") {
-      this.markFeedFailed(channelId, feed.feedId, feed.failCount, fetched.error);
+      this.markFeedFailed(
+        channelId,
+        feed.feedId,
+        feed.failCount,
+        fetched.error,
+      );
       return null;
     }
 
@@ -112,14 +146,20 @@ export class NewsSyncEngine {
         channelId,
         feed.feedId,
         feed.failCount,
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.message : String(err),
       );
       return null;
     }
 
     let added = 0;
     for (const item of parsed.items.slice(0, MAX_ITEMS_PER_POLL)) {
-      if (await this.insertArticle(channelId, { ...item, feedId: feed.feedId, origin: "feed" })) {
+      if (
+        await this.insertArticle(channelId, {
+          ...item,
+          feedId: feed.feedId,
+          origin: "feed",
+        })
+      ) {
         added += 1;
       }
     }
@@ -146,7 +186,7 @@ export class NewsSyncEngine {
       blurb?: string;
       /** Display source/publication for search articles (feed articles use the feed title). */
       source?: string;
-    }
+    },
   ): Promise<boolean> {
     let canonical: string;
     let id: string;
@@ -173,7 +213,7 @@ export class NewsSyncEngine {
       item.source ?? null,
       item.publishedAt ?? null,
       this.deps.now(),
-      item.blurb ?? null
+      item.blurb ?? null,
     );
     return this.countArticles(channelId) > before;
   }
@@ -188,14 +228,18 @@ export class NewsSyncEngine {
          FROM news_articles a
          LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
          WHERE a.channel_id = ? AND a.briefed_in IS NULL AND a.read = 0`,
-        channelId
+        channelId,
       )
       .toArray();
     const scored = rows.map((row) => {
       const score = scoreArticle({
-        publishedAt: row["published_at"] === null ? undefined : Number(row["published_at"]),
+        publishedAt:
+          row["published_at"] === null
+            ? undefined
+            : Number(row["published_at"]),
         fetchedAt: Number(row["fetched_at"]),
-        feedWeight: row["feed_weight"] === null ? 1 : Number(row["feed_weight"]),
+        feedWeight:
+          row["feed_weight"] === null ? 1 : Number(row["feed_weight"]),
         now,
       });
       const summary = (row["summary"] as string | null) ?? undefined;
@@ -222,7 +266,10 @@ export class NewsSyncEngine {
 
   countArticles(channelId: string): number {
     const row = this.deps.sql
-      .exec(`SELECT COUNT(*) AS n FROM news_articles WHERE channel_id = ?`, channelId)
+      .exec(
+        `SELECT COUNT(*) AS n FROM news_articles WHERE channel_id = ?`,
+        channelId,
+      )
       .toArray()[0];
     return Number(row?.["n"] ?? 0);
   }
@@ -231,7 +278,7 @@ export class NewsSyncEngine {
     const row = this.deps.sql
       .exec(
         `SELECT COUNT(*) AS n FROM news_articles WHERE channel_id = ? AND briefed_in IS NULL`,
-        channelId
+        channelId,
       )
       .toArray()[0];
     return Number(row?.["n"] ?? 0);
@@ -240,7 +287,12 @@ export class NewsSyncEngine {
   private markFeedOk(
     channelId: string,
     feedId: string,
-    info: { status: string; etag?: string; lastModified?: string; title?: string }
+    info: {
+      status: string;
+      etag?: string;
+      lastModified?: string;
+      title?: string;
+    },
   ): void {
     this.deps.sql.exec(
       `UPDATE news_feeds SET
@@ -254,7 +306,7 @@ export class NewsSyncEngine {
       info.lastModified ?? null,
       info.title ?? null,
       channelId,
-      feedId
+      feedId,
     );
   }
 
@@ -262,10 +314,13 @@ export class NewsSyncEngine {
     channelId: string,
     feedId: string,
     priorFailCount: number,
-    error: string
+    error: string,
   ): void {
     const failCount = priorFailCount + 1;
-    const backoff = Math.min(BACKOFF_MAX_MS, Math.pow(2, failCount - 1) * BACKOFF_BASE_MS);
+    const backoff = Math.min(
+      BACKOFF_MAX_MS,
+      Math.pow(2, failCount - 1) * BACKOFF_BASE_MS,
+    );
     this.deps.sql.exec(
       `UPDATE news_feeds SET
          last_fetch_at = ?, last_status = ?, fail_count = ?, backoff_until = ?
@@ -275,7 +330,7 @@ export class NewsSyncEngine {
       failCount,
       this.deps.now() + backoff,
       channelId,
-      feedId
+      feedId,
     );
   }
 }

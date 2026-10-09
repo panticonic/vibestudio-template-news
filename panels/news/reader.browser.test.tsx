@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   stateArgs: { channelName: "reader", agentKey: "reader-agent" },
   emit: (_event: unknown) => {},
   close: () => {},
+  scheduleChanged: (_version: string) => {},
 }));
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-reader",
@@ -32,7 +33,30 @@ vi.mock("@workspace/runtime", () => ({
   panel: { stateArgs: { patch: vi.fn(async () => undefined) } },
   rpc: {
     selfId: "reader-panel",
-    call: async () => ({ defaultModel: "openai-codex:gpt-6-luna" }),
+    call: async (
+      _target: string,
+      method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (method === "workers.resolveService")
+        return { kind: "durable-object", targetId: "missions" };
+      if (method === "observeChanges") {
+        if (!(args[0] as { afterVersion?: string }).afterVersion)
+          return { version: "initial" };
+        return new Promise((resolve, reject) => {
+          const signal = options?.signal;
+          const abort = () => reject(signal?.reason);
+          signal?.throwIfAborted();
+          signal?.addEventListener("abort", abort, { once: true });
+          fixture.scheduleChanged = (version) => {
+            signal?.removeEventListener("abort", abort);
+            resolve({ version });
+          };
+        });
+      }
+      return { defaultModel: "openai-codex:gpt-6-luna" };
+    },
   },
 }));
 vi.mock("@workspace/runtime/internal/diagnostics", () => ({
@@ -239,7 +263,9 @@ it("keeps a channel invalidation that arrives while a reader refresh is finishin
 
   await waitFor(() =>
     expect(
-      fixture.call.mock.calls.filter(([method]) => method === NEWS_METHODS.getOverview),
+      fixture.call.mock.calls.filter(
+        ([method]) => method === NEWS_METHODS.getOverview,
+      ),
     ).toHaveLength(baselineOverviewReads + 2),
   );
 });

@@ -7,6 +7,12 @@ import type {
 } from "@panticonic/pi-durable";
 import type { AgentProductMetadata } from "@workspace/agentic-core/agent-product-metadata";
 import { withRpcAbortSignal, type RpcClient } from "@vibestudio/rpc";
+import {
+  createMissionsClient,
+  type MissionRecord,
+  type MissionTrigger,
+} from "@vibestudio/automation/mission";
+import { canonicalCronTimeZone } from "@vibestudio/automation/cronSchedule";
 import { createRpcFs } from "@workspace/runtime/worker/rpc-fs";
 import {
   AgentWorkerBase,
@@ -76,7 +82,6 @@ import {
   buildTriagePrompt,
 } from "./prompts.js";
 
-const DAY_MS = 24 * 3_600_000;
 const NEWS_BASE_TOOL_NAMES = new Set([
   "suspend_turn",
   "ask_user",
@@ -139,11 +144,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   private ensureChannelState(channelId: string): void {
     this.sql.exec(
-      `INSERT OR IGNORE INTO news_channel_state (channel_id, poll_interval_ms, briefing_interval_ms)
-       VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO news_channel_state (channel_id) VALUES (?)`,
       channelId,
-      DEFAULT_POLL_INTERVAL_MS,
-      DEFAULT_BRIEFING_INTERVAL_MS,
     );
   }
 
@@ -154,14 +156,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       .toArray()[0]!;
     return {
       channelId,
-      pollIntervalMs:
-        Number(row["poll_interval_ms"]) || DEFAULT_POLL_INTERVAL_MS,
-      briefingIntervalMs:
-        Number(row["briefing_interval_ms"]) || DEFAULT_BRIEFING_INTERVAL_MS,
-      briefingAtMinutes:
-        row["briefing_at_minutes"] === null
-          ? undefined
-          : Number(row["briefing_at_minutes"]),
       topK: Number(row["top_k"]) || DEFAULT_TOP_K,
       setupStatus:
         row["setup_status"] === "configured"
@@ -174,7 +168,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       lastSetupJson: (row["last_setup_json"] as string | null) ?? undefined,
       mode: row["mode"] === "analyst" ? "analyst" : "curator",
       feedbackJson: (row["feedback_json"] as string | null) ?? undefined,
-      briefingPaused: Number(row["briefing_paused"]) === 1,
     };
   }
 
@@ -191,12 +184,10 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   private setChannelMode(channelId: string, mode: NewsChannelMode): void {
     this.sql.exec(
-      `INSERT INTO news_channel_state (channel_id, poll_interval_ms, briefing_interval_ms, setup_status, mode)
-       VALUES (?, ?, ?, 'configured', ?)
+      `INSERT INTO news_channel_state (channel_id, setup_status, mode)
+       VALUES (?, 'configured', ?)
        ON CONFLICT(channel_id) DO UPDATE SET mode = excluded.mode`,
       channelId,
-      DEFAULT_POLL_INTERVAL_MS,
-      DEFAULT_BRIEFING_INTERVAL_MS,
       mode,
     );
   }
@@ -204,12 +195,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private saveChannelState(state: NewsChannelState): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO news_channel_state
-       (channel_id, poll_interval_ms, briefing_interval_ms, briefing_at_minutes, top_k, setup_status, preferences_text, last_briefing_id, last_run_at, last_error, last_setup_json, mode, feedback_json, briefing_paused)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (channel_id, top_k, setup_status, preferences_text, last_briefing_id, last_run_at, last_error, last_setup_json, mode, feedback_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       state.channelId,
-      state.pollIntervalMs,
-      state.briefingIntervalMs,
-      state.briefingAtMinutes ?? null,
       state.topK,
       state.setupStatus,
       state.preferencesText ?? null,
@@ -219,7 +207,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       state.lastSetupJson ?? null,
       state.mode,
       state.feedbackJson ?? null,
-      state.briefingPaused ? 1 : 0,
     );
   }
 
@@ -289,7 +276,11 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       : NEWS_SYSTEM_PROMPT;
   }
 
-  private boundNewsEffects(rpc: RpcClient, context: Context): NewsEffects {
+  private boundNewsEffects(
+    rpc: RpcClient,
+    context: Context,
+    metadata?: AgentProductMetadata,
+  ): NewsEffects {
     const cards = new CardManager({
       sql: this.sql,
       createChannelClient: (id) => this.createChannelClient(id, rpc),
@@ -319,6 +310,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         }
       },
       signal: context.abortSignal,
+      metadata,
     };
   }
 
@@ -338,7 +330,11 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         if (record(api.executionData)["channelId"] !== channelId)
           throw new Error("News tool changed its original channel binding");
         const execution = await this.bindNativeToolExecution(api, context);
-        const effects = this.boundNewsEffects(execution.rpc, context);
+        const effects = this.boundNewsEffects(
+          execution.rpc,
+          context,
+          execution.metadata,
+        );
         if (op.needsRecovery) await this.ensureRecovered(channelId, effects);
         const details = copyJson(
           await op.run({ handlers: this, effects }, channelId, record(args)),
@@ -390,7 +386,128 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     this.ensureChannelState(channelId);
     await this.installChannelUi(channelId, effects);
     if (this.getMode(channelId) !== "analyst")
+      await this.ensureNewsSchedules(channelId, effects);
+    if (this.getMode(channelId) !== "analyst")
       await this.publishSetupCard(channelId, effects);
+  }
+
+  private scheduleId(channelId: string, kind: "poll" | "briefing"): string {
+    return `news:${this.objectKey}:${channelId}:${kind}`;
+  }
+
+  private async readNewsSchedules(channelId: string, effects?: NewsEffects) {
+    const missions = createMissionsClient(effects?.rpc ?? this.rpc);
+    const [poll, briefing] = await Promise.all([
+      missions.getDefault(this.scheduleId(channelId, "poll")),
+      missions.getDefault(this.scheduleId(channelId, "briefing")),
+    ]);
+    return { missions, poll, briefing };
+  }
+
+  /** Missions is the sole schedule owner; reopening never overwrites edits. */
+  private async ensureNewsSchedules(
+    channelId: string,
+    effects?: NewsEffects,
+    initialState: {
+      poll: "active" | "paused";
+      briefing: "active" | "paused";
+    } = { poll: "active", briefing: "active" },
+  ) {
+    const current = await this.readNewsSchedules(channelId, effects);
+    const definitions = [
+      {
+        kind: "poll" as const,
+        name: "Refresh News",
+        summary: "Refresh this reader's feeds.",
+        trigger: () =>
+          ({
+            kind: "schedule",
+            everyMs: DEFAULT_POLL_INTERVAL_MS,
+          }) as MissionTrigger,
+        briefing: false,
+      },
+      {
+        kind: "briefing" as const,
+        name: "News briefing",
+        summary: "Prepare this reader's news briefing.",
+        trigger: () =>
+          ({
+            kind: "schedule",
+            everyMs: DEFAULT_BRIEFING_INTERVAL_MS,
+          }) as MissionTrigger,
+        briefing: true,
+      },
+    ];
+    for (const definition of definitions) {
+      if (current[definition.kind]) continue;
+      await this.provisionChannelAutomation(
+        this.scheduleId(channelId, definition.kind),
+        channelId,
+        {
+          name: definition.name,
+          summary: definition.summary,
+          action: {
+            kind: "tool",
+            tool: "refreshNow",
+            args: { briefing: definition.briefing },
+          },
+          trigger: definition.trigger(),
+          state: initialState[definition.kind],
+          operations: [],
+        },
+        effects?.rpc ?? this.rpc,
+      );
+    }
+    return this.readNewsSchedules(channelId, effects);
+  }
+
+  private dailyBriefingTrigger(
+    minutes: number,
+    timezone?: string,
+  ): MissionTrigger {
+    if (!timezone)
+      throw new Error(
+        "A daily News briefing requires an explicit IANA timezone.",
+      );
+    return {
+      kind: "cron",
+      expression: `${minutes % 60} ${Math.floor(minutes / 60)} * * *`,
+      timezone: canonicalCronTimeZone(timezone),
+    };
+  }
+
+  private scheduleProjection(
+    poll: MissionRecord | null,
+    briefing: MissionRecord | null,
+  ) {
+    const describe = (mission: MissionRecord | null) => {
+      if (!mission) return "not scheduled";
+      if (mission.state !== "active") return mission.state;
+      const trigger = mission.charter.trigger;
+      if (trigger.kind === "manual") return "manual";
+      if (trigger.kind === "cron")
+        return `${trigger.expression} (${trigger.timezone})`;
+      return `every ${Math.round(trigger.everyMs / 60_000)}m`;
+    };
+    const pollTrigger = poll?.charter.trigger;
+    const briefTrigger = briefing?.charter.trigger;
+    const daily =
+      briefTrigger?.kind === "cron"
+        ? /^(\d+) (\d+) \* \* \*$/.exec(briefTrigger.expression)
+        : null;
+    return {
+      scheduleSummary: `feeds ${describe(poll)}; briefing ${describe(briefing)}`,
+      pollIntervalMs:
+        pollTrigger?.kind === "schedule" ? pollTrigger.everyMs : undefined,
+      briefingIntervalMs:
+        briefTrigger?.kind === "schedule" ? briefTrigger.everyMs : undefined,
+      briefingAtMinutes: daily
+        ? Number(daily[2]) * 60 + Number(daily[1])
+        : undefined,
+      timezone:
+        briefTrigger?.kind === "cron" ? briefTrigger.timezone : undefined,
+      briefingPaused: !briefing || briefing.state !== "active",
+    };
   }
 
   // ── deep-dive forks ─────────────────────────────────────────────────────────
@@ -438,10 +555,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private async runPoll(
     channelId: string,
     opts?: { force?: boolean },
+    effects?: NewsEffects,
   ): Promise<void> {
     const state = this.getChannelState(channelId);
     try {
-      const result = await this.syncEngine.pollChannel(channelId, opts);
+      const result = await this.syncEngine.pollChannel(channelId, {
+        ...opts,
+        fetcher: effects?.fetcher,
+        signal: effects?.signal,
+      });
       // Skipped feeds retain their own failure state. A no-op poll cannot
       // declare recovery from a failure or advance the successful-sync time.
       if (result.feedsPolled > result.feedsFailed) state.lastRunAt = this.now();
@@ -457,10 +579,22 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
           ? `${count} ${count === 1 ? "feed could" : "feeds could"} not refresh. Open Sources for the failure details.`
           : undefined;
     } catch (err) {
+      effects?.signal?.throwIfAborted();
       state.lastError = err instanceof Error ? err.message : String(err);
+      this.saveChannelState(state);
+      try {
+        await this.publishSetupCard(channelId, effects);
+      } catch (cardError) {
+        throw new AggregateError(
+          [err, cardError],
+          "News polling failed and its setup card could not be updated.",
+          { cause: err },
+        );
+      }
+      throw err;
     }
     this.saveChannelState(state);
-    await this.publishSetupCard(channelId);
+    await this.publishSetupCard(channelId, effects);
   }
 
   private briefingErrorKey(channelId: string, briefingId: string): string {
@@ -531,9 +665,10 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private async runBriefing(
     channelId: string,
     opts?: { notify?: boolean },
+    effects?: NewsEffects,
   ): Promise<void> {
     // Fresh articles first; a stale snapshot makes a stale briefing.
-    await this.runPoll(channelId);
+    await this.runPoll(channelId, undefined, effects);
     // Briefing time also triages the backlog so the reader feed stays curated.
     await this.runTriage(channelId);
     const state = this.getChannelState(channelId);
@@ -569,7 +704,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const steeringId = `news-briefing:${channelId}:${briefingId}`;
     const previousTldr = this.previousTldr(channelId, briefingId);
     try {
-      await this.newsCards.createBriefing(channelId, card);
+      effects?.signal?.throwIfAborted();
+      await (effects?.cards ?? this.newsCards).createBriefing(channelId, card);
       await this.submitAgentInitiatedTurn(
         channelId,
         {
@@ -585,6 +721,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
           }),
         },
         { steeringId, domain: { kind: "news.briefing", data: { briefingId } } },
+        { ...BACKGROUND_CONTEXT, abortSignal: effects?.signal },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -777,7 +914,10 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   // ── setup card ────────────────────────────────────────────────────────────
 
-  private buildSetupCardState(channelId: string): NewsSetupCardState {
+  private async buildSetupCardState(
+    channelId: string,
+    effects?: NewsEffects,
+  ): Promise<NewsSetupCardState> {
     const state = this.getChannelState(channelId);
     const feeds = this.sql
       .exec(
@@ -799,20 +939,12 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         failCount: Number(row["fail_count"]) || 0,
       }));
     const followedTopics = this.listTopics(channelId);
-    const briefingLabel = state.briefingPaused
-      ? "paused"
-      : state.briefingAtMinutes !== undefined
-        ? `daily at ${String(Math.floor(state.briefingAtMinutes / 60)).padStart(2, "0")}:${String(state.briefingAtMinutes % 60).padStart(2, "0")}`
-        : `every ${Math.round(state.briefingIntervalMs / 3_600_000)}h`;
+    const { poll, briefing } = await this.readNewsSchedules(channelId, effects);
     return {
       status: state.setupStatus,
       feeds,
       followedTopics,
-      scheduleSummary: `polls every ${Math.round(state.pollIntervalMs / 60_000)}m, briefing ${briefingLabel}`,
-      pollIntervalMs: state.pollIntervalMs,
-      briefingIntervalMs: state.briefingIntervalMs,
-      briefingAtMinutes: state.briefingAtMinutes,
-      briefingPaused: state.briefingPaused,
+      ...this.scheduleProjection(poll, briefing),
       preferencesText: state.preferencesText,
       lastRunAt: state.lastRunAt
         ? new Date(state.lastRunAt).toISOString()
@@ -825,7 +957,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     channelId: string,
     effects?: NewsEffects,
   ): Promise<void> {
-    const payload = this.buildSetupCardState(channelId);
+    const payload = await this.buildSetupCardState(channelId, effects);
     const state = this.getChannelState(channelId);
     // Dedup on the meaningful fields only. `lastRunAt` ticks on every poll but
     // isn't rendered, so including it would defeat the dedup and re-emit the
@@ -1396,9 +1528,15 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   ): Promise<unknown> {
     const paused = booleanArg(args, "paused");
     if (paused === undefined) return { error: "paused is required" };
-    const state = this.getChannelState(channelId);
-    state.briefingPaused = paused;
-    this.saveChannelState(state);
+    const { missions, briefing } = await this.ensureNewsSchedules(
+      channelId,
+      effects,
+      { poll: "active", briefing: paused ? "paused" : "active" },
+    );
+    if (!briefing)
+      throw new Error("News briefing schedule was not admitted by its owner.");
+    if (paused) await missions.pause(briefing.missionId);
+    else await missions.resume(briefing.missionId);
     await this.publishSetupCard(channelId, effects);
     return { briefingPaused: paused };
   }
@@ -1741,38 +1879,81 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     args: Record<string, unknown>,
     effects?: NewsEffects,
   ): Promise<unknown> {
-    const state = this.getChannelState(channelId);
-    const pollIntervalMs = numberArg(args, "pollIntervalMs");
-    const briefingIntervalMs = numberArg(args, "briefingIntervalMs");
-    if (pollIntervalMs !== undefined)
-      state.pollIntervalMs = Math.max(60_000, pollIntervalMs);
-    if (briefingIntervalMs !== undefined)
-      state.briefingIntervalMs = Math.max(600_000, briefingIntervalMs);
-    if ("briefingAt" in args) {
-      const at = args["briefingAt"];
-      if (at === null) {
-        state.briefingAtMinutes = undefined;
-      } else if (typeof at === "string") {
-        const match = /^(\d{1,2}):(\d{2})$/.exec(at.trim());
-        if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) {
-          return { error: `invalid briefingAt: ${at} (expected "HH:MM")` };
-        }
-        state.briefingAtMinutes = Number(match[1]) * 60 + Number(match[2]);
-        // A local-time anchor implies a daily cadence.
-        state.briefingIntervalMs = Math.max(
-          DAY_MS,
-          state.briefingIntervalMs - (state.briefingIntervalMs % DAY_MS) ||
-            DAY_MS,
+    const interval = (key: string, minimum: number): number | undefined => {
+      if (!(key in args)) return undefined;
+      const value = numberArg(args, key);
+      if (
+        value === undefined ||
+        !Number.isSafeInteger(value) ||
+        value < minimum
+      )
+        throw new Error(
+          `${key} must be an integer of at least ${minimum} milliseconds.`,
         );
-      }
-    }
-    this.saveChannelState(state);
-    await this.publishSetupCard(channelId, effects);
-    return {
-      pollIntervalMs: state.pollIntervalMs,
-      briefingIntervalMs: state.briefingIntervalMs,
-      briefingAtMinutes: state.briefingAtMinutes,
+      return value;
     };
+    const pollIntervalMs = interval("pollIntervalMs", 60_000);
+    const briefingIntervalMs = interval("briefingIntervalMs", 600_000);
+    let minutes: number | undefined;
+    if (args["briefingAt"] !== undefined && args["briefingAt"] !== null) {
+      const at = args["briefingAt"];
+      const match =
+        typeof at === "string" ? /^(\d{1,2}):(\d{2})$/.exec(at.trim()) : null;
+      if (!match || Number(match[1]) > 23 || Number(match[2]) > 59)
+        throw new Error("briefingAt must be a valid HH:MM time.");
+      minutes = Number(match[1]) * 60 + Number(match[2]);
+    }
+    // Validate user input before provisioning or editing either owner row.
+    const requestedTimezone = stringArg(args, "timezone");
+    if (requestedTimezone) canonicalCronTimeZone(requestedTimezone);
+    const existing = await this.readNewsSchedules(channelId, effects);
+    const dailyTrigger =
+      minutes === undefined
+        ? undefined
+        : this.dailyBriefingTrigger(
+            minutes,
+            requestedTimezone ??
+              (existing.briefing?.charter.trigger.kind === "cron"
+                ? existing.briefing.charter.trigger.timezone
+                : undefined),
+          );
+    const { missions, poll, briefing } = await this.ensureNewsSchedules(
+      channelId,
+      effects,
+    );
+    if (!poll || !briefing)
+      throw new Error("News schedules were not admitted by their owner.");
+    let trigger: MissionTrigger | undefined;
+    if (minutes !== undefined) {
+      trigger = dailyTrigger;
+    } else if (requestedTimezone && briefing.charter.trigger.kind === "cron") {
+      trigger = {
+        ...briefing.charter.trigger,
+        timezone: canonicalCronTimeZone(requestedTimezone),
+      };
+    } else if (
+      briefingIntervalMs !== undefined ||
+      args["briefingAt"] === null
+    ) {
+      trigger = {
+        kind: "schedule",
+        everyMs: briefingIntervalMs ?? DEFAULT_BRIEFING_INTERVAL_MS,
+      };
+    }
+    if (pollIntervalMs !== undefined)
+      await missions.edit(poll.missionId, {
+        charter: {
+          ...poll.charter,
+          trigger: { kind: "schedule", everyMs: pollIntervalMs },
+        },
+      });
+    if (trigger)
+      await missions.edit(briefing.missionId, {
+        charter: { ...briefing.charter, trigger },
+      });
+    await this.publishSetupCard(channelId, effects);
+    const current = await this.readNewsSchedules(channelId, effects);
+    return this.scheduleProjection(current.poll, current.briefing);
   }
 
   async markRead(
@@ -1902,11 +2083,16 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   async refreshNow(
     channelId: string,
     args: Record<string, unknown>,
+    effects?: NewsEffects,
   ): Promise<unknown> {
-    await this.runPoll(channelId, { force: true });
+    await this.runPoll(channelId, { force: true }, effects);
     if (booleanArg(args, "briefing")) {
       // Manual "Brief me now" — the reader is right here, so stay silent.
-      await this.runBriefing(channelId, { notify: false });
+      await this.runBriefing(
+        channelId,
+        { notify: effects?.metadata?.origin === "scheduled" },
+        effects,
+      );
       return { polled: true, briefingStarted: true };
     }
     return {
@@ -1954,7 +2140,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   ): Promise<unknown> {
     const state = this.getChannelState(channelId);
     return {
-      setup: this.buildSetupCardState(channelId),
+      setup: await this.buildSetupCardState(channelId),
       articleCount: this.syncEngine.countArticles(channelId),
       unbriefedCount: this.syncEngine.countUnbriefed(channelId),
       untriagedCount: this.countUntriaged(channelId),
