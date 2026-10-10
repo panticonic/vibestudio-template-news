@@ -10,6 +10,7 @@ import { MissionsDO } from "@workspace-workers/missions";
 import type { MissionRecord } from "@vibestudio/automation/mission";
 import { createNativeVesselTestDO as createTestDO } from "@workspace/agentic-do/testing/native-vessel";
 import { createNativeChannelProvider } from "@workspace/agentic-do/testing/native-channel-provider";
+import type { ChannelEndpoint } from "@workspace/pubsub";
 import { createModels, fauxProvider } from "@panticonic/pi-ai";
 import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
 import {
@@ -47,14 +48,17 @@ const missionPolicy = {
 };
 afterEach(async () => {
   const results = await Promise.allSettled(
-    resources.map(({ instance }) =>
-      instance.releaseForLifecycle({
+    resources.map(async ({ instance }) => {
+      const lifecycle = {
         epoch: "test-end",
-        mode: "suspend",
+        mode: "suspend" as const,
         reason: "test",
         deadlineMs: 0,
-      }),
-    ),
+      };
+      await instance.releaseForLifecycle({ ...lifecycle, phase: "quiesce" });
+      await instance.releaseForLifecycle({ ...lifecycle, phase: "peer-obligations" });
+      await instance.releaseForLifecycle({ ...lifecycle, phase: "release" });
+    }),
   );
   for (const resource of resources.splice(0)) {
     try {
@@ -67,12 +71,15 @@ afterEach(async () => {
     if (result.status === "rejected") throw result.reason;
   for (const owner of missionResources.splice(0)) {
     try {
-      await owner.instance.releaseForLifecycle({
+      const lifecycle = {
         epoch: "test-end",
-        mode: "suspend",
+        mode: "suspend" as const,
         reason: "test",
         deadlineMs: 0,
-      });
+      };
+      await owner.instance.releaseForLifecycle({ ...lifecycle, phase: "quiesce" });
+      await owner.instance.releaseForLifecycle({ ...lifecycle, phase: "peer-obligations" });
+      await owner.instance.releaseForLifecycle({ ...lifecycle, phase: "release" });
     } finally {
       owner.db.close();
     }
@@ -88,6 +95,14 @@ import { NEWS_MESSAGE_TYPES } from "./cards.js";
 import { ARTICLE_RETENTION_MS } from "./types.js";
 
 const FEED_URL = "https://example.com/feed.xml";
+
+function channelEndpoint(channelId: string): ChannelEndpoint {
+  return {
+    source: "workers/pubsub-channel",
+    className: "PubSubChannel",
+    objectKey: channelId,
+  };
+}
 
 function rss(
   items: Array<{ title: string; link: string; pubDate?: string }>,
@@ -115,6 +130,10 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   private readonly methodChannels = new Map<
     string,
     ReturnType<typeof createNativeChannelProvider>
+  >();
+  private readonly joinedRelationships = new Map<
+    string,
+    { relationship: string; revision: number }
   >();
   private methodChannel(channelId: string) {
     let channel = this.methodChannels.get(channelId);
@@ -309,11 +328,13 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   }
 
   seedSubscription(channelId = "ch-1", participantId = this.participantId()) {
+    const channelRef = channelEndpoint(channelId);
     this.sql.exec(
       `INSERT OR REPLACE INTO subscriptions
-         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (channel_id, channel_ref_json, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       channelId,
+      JSON.stringify(channelRef),
       "ctx-1",
       1,
       Date.now(),
@@ -374,7 +395,22 @@ class TestNewsAgentWorker extends NewsAgentWorker {
           };
         }
         if (method === "workspace-state.alarmSourceRegister")
-          return "test-storage-incarnation";
+          return {
+            incarnation: "test-storage-incarnation",
+            entity: {
+              id: image.runtimeId,
+              authoritySessionId: "test-owner",
+              kind: "do",
+              source: { repoPath: image.source, effectiveVersion: "e".repeat(64) },
+              activeExecutionDigest: image.executionDigest,
+              className: image.className,
+              key: image.objectKey,
+              contextId: "ctx-1",
+              createdAt: 1,
+              status: "active",
+              cleanupComplete: false,
+            },
+          };
         if (method === "workspace-state.alarmSourcePublish") return "accepted";
         if (method === "authority.outstandingAcquisitions")
           return { receipts: [], next: null };
@@ -408,13 +444,30 @@ class TestNewsAgentWorker extends NewsAgentWorker {
           generation,
         ),
       relationshipState: async () => null,
-      join: async (input: { participantId: string; revision: number }) => ({
-        ok: true,
-        participantId: input.participantId,
-        revision: input.revision,
-        channelConfig: undefined,
-        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
-      }),
+      join: async (input: {
+        participantId: string;
+        operationId: string;
+        contextId: string;
+        metadata: Record<string, unknown>;
+        delivery: "all" | "addressed" | "none";
+        endpoint: { kind: "entity"; entityId: string; invocation: "direct" | "mailbox" } | { kind: "session" };
+        applicationConfig: { version: number; value: unknown } | null;
+        replay: boolean;
+      }) => {
+        const { operationId: _operationId, replay: _replay, ...relationship } = input;
+        const key = JSON.stringify(relationship);
+        const previous = this.joinedRelationships.get(channelId);
+        const revision =
+          previous?.relationship === key ? previous.revision : (previous?.revision ?? 0) + 1;
+        this.joinedRelationships.set(channelId, { relationship: key, revision });
+        return {
+          ok: true,
+          participantId: input.participantId,
+          revision,
+          channelConfig: undefined,
+          envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+        };
+      },
       leave: async () => ({ ok: true }),
       getConfig: async () => null,
       getParticipants: async () => [],
@@ -503,6 +556,14 @@ async function makeWorker() {
     WORKER_SOURCE_REF: `state:${"d".repeat(64)}`,
     WORKERD_SESSION_ID: "test-session",
     WORKERD_BOOT_GENERATION: "1",
+  }, {
+    props: {
+      stateArgs: null,
+      image: {
+        effectiveVersion: "e".repeat(64),
+        sourceRef: `state:${"d".repeat(64)}`,
+      },
+    },
   });
   resources.push(resource);
   const worker = resource.instance as TestNewsAgentWorker;
@@ -628,8 +689,9 @@ describe("NewsAgentWorker", () => {
     await owner.callAs(user, "pause", briefing.missionId);
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     expect(await worker.setSchedule("ch-1", {})).toMatchObject({
       pollIntervalMs: 1_200_000,
       briefingPaused: true,
@@ -821,8 +883,9 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
 
     const kinds = worker.published.map((entry) => entry.event.kind);
     expect(kinds).toContain("messageType.registered");
@@ -832,8 +895,9 @@ describe("NewsAgentWorker", () => {
     // Re-subscribe does not re-prompt.
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     expect(worker.agentInitiatedTurns).toHaveLength(0);
   });
 
@@ -1237,8 +1301,9 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     await addExampleFeed(worker, [
       { title: "A", link: "https://example.com/a" },
     ]);
@@ -1395,8 +1460,9 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     await addExampleFeed(worker, [
       { title: "A", link: "https://example.com/a" },
     ]);
@@ -1453,8 +1519,9 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     await addExampleFeed(worker, [
       { title: "A", link: "https://example.com/a" },
     ]);
@@ -1833,8 +1900,9 @@ describe("NewsAgentWorker", () => {
 
     await worker.subscribeChannel({
       channelId: "an-1",
+      channelRef: channelEndpoint("an-1"),
       contextId: "ctx-1",
-    } as never);
+    });
 
     const kinds = worker.published.map((entry) => entry.event.kind);
     expect(kinds).toContain("messageType.registered"); // UI still installed
@@ -1846,8 +1914,9 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     const setupEmits = () =>
       worker.published.filter(
         (entry) =>
@@ -2091,8 +2160,9 @@ describe("NewsAgentWorker native tool execution", () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({
       channelId: "ch-1",
+      channelRef: channelEndpoint("ch-1"),
       contextId: "ctx-1",
-    } as never);
+    });
     await addExampleFeed(worker, [
       { title: "Story A", link: "https://example.com/a" },
     ]);
