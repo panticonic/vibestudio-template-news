@@ -15,6 +15,12 @@ export interface NewsEffects {
 
 import { record } from "./types.js";
 import { NEWS_METHODS } from "@workspace/feeds";
+import {
+  newsArchiveSearchResultSchema,
+  newsArticlePageResultSchema,
+  newsBriefingHistoryResultSchema,
+  newsOverviewResultSchema,
+} from "@workspace/feeds";
 
 /**
  * Single source of truth for the news agent's surface: model tools,
@@ -134,6 +140,7 @@ export interface NewsOperation {
   schema: Record<string, unknown>;
   exposure: NewsOperationExposure[];
   needsRecovery?: boolean;
+  outputSchema?: { parse(value: unknown): unknown };
   run: (
     ctx: NewsOperationContext,
     channelId: string,
@@ -255,6 +262,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.listArticles,
+    outputSchema: newsArticlePageResultSchema,
     description:
       "List ingested articles, newest first. Returns { count, articles: [{ articleId, title, url, source, blurb, publishedAt, briefedIn, read }] }. Filters: unbriefedOnly, sinceMs (epoch), limit (default 30).",
     schema: {
@@ -320,6 +328,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.getBriefingHistory,
+    outputSchema: newsBriefingHistoryResultSchema,
     description:
       "Previous briefings with their TLDRs, newest first. limit defaults to 5.",
     schema: {
@@ -411,6 +420,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.searchArchive,
+    outputSchema: newsArchiveSearchResultSchema,
     description:
       "Search ingested articles and past briefing TLDRs by keyword. Returns { query, articles, briefings }.",
     schema: {
@@ -531,6 +541,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   },
   {
     name: NEWS_METHODS.getOverview,
+    outputSchema: newsOverviewResultSchema,
     description:
       "Snapshot of feeds, topics, schedule, article counts, and last briefing.",
     schema: NO_ARGS,

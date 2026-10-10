@@ -1,4 +1,9 @@
-export { parseFeed, FeedParseError, type ParsedFeed, type FeedItem } from "./parse.js";
+export {
+  parseFeed,
+  FeedParseError,
+  type ParsedFeed,
+  type FeedItem,
+} from "./parse.js";
 export { discoverFeedUrl } from "./discover.js";
 export { parseOpml, type OpmlFeed } from "./opml.js";
 export { canonicalizeUrl, articleId, titleSimilarityKey } from "./canonical.js";
@@ -17,3 +22,17 @@ export {
   type RankTopKOptions,
 } from "./score.js";
 export { NEWS_METHODS, type NewsMethodName } from "./news-methods.js";
+export {
+  newsArticleResultSchema,
+  newsBriefingResultSchema,
+  newsOverviewResultSchema,
+  newsArticlePageResultSchema,
+  newsBriefingHistoryResultSchema,
+  newsArchiveSearchResultSchema,
+  type NewsArticleResult,
+  type NewsBriefingResult,
+  type NewsOverviewResult,
+  type NewsArticlePageResult,
+  type NewsBriefingHistoryResult,
+  type NewsArchiveSearchResult,
+} from "./news-results.js";

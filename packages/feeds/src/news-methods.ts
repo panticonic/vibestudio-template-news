@@ -1,9 +1,10 @@
 /**
  * The channel method names shared by the News worker and its reader panel.
  *
- * Keep this contract in the small feeds package rather than duplicating
- * string literals in a worker and a browser bundle. The worker uses it when
- * building its operation table; the panel uses it when making calls.
+ * Keep the names and the result schemas in the small feeds package rather
+ * than duplicating wire contracts in a worker and browser bundle. The worker
+ * uses them when building and validating its operation table; the panel uses
+ * the same schemas when decoding participant results.
  */
 export const NEWS_METHODS = {
   addFeed: "news_add_feed",

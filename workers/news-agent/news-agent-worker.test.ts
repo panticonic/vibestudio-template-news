@@ -1,6 +1,10 @@
+import { durableObjectServiceFixture } from "@vibestudio/service-schemas/test-utils";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { rpcMethodAuthority, type RpcClient } from "@vibestudio/rpc";
+import { wireClientFor, type RpcWireCaller } from "@vibestudio/rpc/internal";
+import { createMainRpcCaller } from "@vibestudio/service-schemas/mainRpc";
 import { createTestDO as createMissionOwner } from "@vibestudio/durable/test-utils";
 import { MissionsDO } from "@workspace-workers/missions";
 import type { MissionRecord } from "@vibestudio/automation/mission";
@@ -25,8 +29,14 @@ const resources: Array<{
   instance: TestNewsAgentWorker;
   db: { close(): void };
 }> = [];
+class TestMissionsDO extends MissionsDO {
+  setRpcCallForTest(call: RpcWireCaller["call"]): void {
+    wireClientFor(this.rpc).call = call;
+  }
+}
+
 const missionResources: Array<
-  Awaited<ReturnType<typeof createMissionOwner<MissionsDO>>>
+  Awaited<ReturnType<typeof createMissionOwner<typeof TestMissionsDO>>>
 > = [];
 const missionPolicy = {
   schemaVersion: 2 as const,
@@ -96,7 +106,7 @@ function rss(
 
 class TestNewsAgentWorker extends NewsAgentWorker {
   missionOwner: Awaited<
-    ReturnType<typeof createMissionOwner<MissionsDO>>
+    ReturnType<typeof createMissionOwner<typeof TestMissionsDO>>
   > | null = null;
   // Genuine ChannelDO fixture deliveries use the trusted host RPC boundary.
   protected override get rpcCallerKind(): string | null {
@@ -214,8 +224,8 @@ class TestNewsAgentWorker extends NewsAgentWorker {
       if (method === "runtime.resolveContext") return "ctx-1";
       if (method === "workers.resolveService") {
         if (args?.[0] === "vibestudio.missions.v1")
-          return { kind: "durable-object", targetId: "do:missions:test" };
-        return { kind: "durable-object", targetId: "do:channel:test" };
+          return durableObjectServiceFixture("do:missions:test");
+        return durableObjectServiceFixture("do:channel:test");
       }
       if (method === "authority.compileAuthorityPlan") return missionPolicy;
       if (target === "do:missions:test") {
@@ -238,7 +248,9 @@ class TestNewsAgentWorker extends NewsAgentWorker {
       }
       if (
         method === "workspace-state.alarmSet" ||
-        method === "workspace-state.alarmClear"
+        method === "workspace-state.alarmClear" ||
+        method === "workspace-state.lifecycleLeaseUpsert" ||
+        method === "workspace-state.lifecycleLeaseClear"
       ) {
         return undefined;
       }
@@ -270,28 +282,16 @@ class TestNewsAgentWorker extends NewsAgentWorker {
         this.blobs.set(digest, value);
         return { digest, size: value.length };
       }
-      return null;
+      if (method === "workspace.getAgentResources")
+        return { workspacePrompt: "", skills: [] };
+      throw new Error(`unexpected RPC ${target}.${method}`);
     },
   );
 
   protected override get rpc(): RpcClient {
     const base = super.rpc;
-    const call = this.rpcCall;
-    return new Proxy(base, {
-      get(target, property, receiver) {
-        if (property === "call") return workerCall;
-        const value = Reflect.get(target, property, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    function workerCall<T>(
-      target: string,
-      method: string,
-      args: unknown[],
-      options?: import("@vibestudio/rpc").RpcCallOptions,
-    ): Promise<T> {
-      return call(target, method, args, options) as Promise<T>;
-    }
+    wireClientFor(base).call = this.rpcCall;
+    return base;
   }
 
   protected override feedFetcher(): Fetcher {
@@ -354,18 +354,16 @@ class TestNewsAgentWorker extends NewsAgentWorker {
       forkPointPubsubId: 7,
     });
   }
-  protected override callAgentHost = async <T>(
-    method: string,
-    _args: unknown[],
-  ): Promise<T> => {
-    const image = this.loadedImage();
-    const value =
-      method === "workspace-state.entity.resolveActive"
-        ? {
+  protected override callAgentHost = createMainRpcCaller(
+    schemaRpcMock({
+      call: async (_target, method) => {
+        const image = this.loadedImage();
+        if (method === "workspace-state.entity.resolveActive") {
+          return {
             id: image.runtimeId,
             authoritySessionId: "test-owner",
             kind: "do",
-            source: { repoPath: image.source, effectiveVersion: "test" },
+            source: { repoPath: image.source, effectiveVersion: "e".repeat(64) },
             activeExecutionDigest: image.executionDigest,
             className: image.className,
             key: image.objectKey,
@@ -373,24 +371,23 @@ class TestNewsAgentWorker extends NewsAgentWorker {
             createdAt: 1,
             status: "active",
             cleanupComplete: false,
-          }
-        : method === "workspace-state.alarmSourceRegister"
-          ? "test-storage-incarnation"
-          : method === "workspace-state.alarmSourcePublish"
-            ? "accepted"
-            : method === "authority.outstandingAcquisitions"
-              ? { receipts: [], next: null }
-              : [
-                    "workspace-state.lifecycleLeaseUpsert",
-                    "workspace-state.lifecycleLeaseClear",
-                    "workerLog.write",
-                  ].includes(method)
-                ? undefined
-                : (() => {
-                    throw new Error(`Unexpected host fixture ${method}`);
-                  })();
-    return value as T;
-  };
+          };
+        }
+        if (method === "workspace-state.alarmSourceRegister")
+          return "test-storage-incarnation";
+        if (method === "workspace-state.alarmSourcePublish") return "accepted";
+        if (method === "authority.outstandingAcquisitions")
+          return { receipts: [], next: null };
+        if (
+          method === "workspace-state.lifecycleLeaseUpsert" ||
+          method === "workspace-state.lifecycleLeaseClear" ||
+          method === "workerLog.write"
+        )
+          return undefined;
+        throw new Error(`Unexpected host fixture ${method}`);
+      },
+    }),
+  );
 
   protected override createChannelClient(channelId: string) {
     return {
@@ -484,21 +481,20 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 }
 
 async function makeWorker() {
-  const missionOwner = await createMissionOwner(MissionsDO, {
+  const missionOwner = await createMissionOwner(TestMissionsDO, {
     WORKER_SOURCE: "workers/missions",
     WORKER_CLASS_NAME: "MissionsDO",
     __objectKey: "news-test-missions",
   });
   missionResources.push(missionOwner);
-  Object.defineProperty(missionOwner.instance, "rpc", {
-    value: {
-      call: async (_target: string, method: string) => {
-        if (method === "authority.verifyAuthorityPlan") return missionPolicy;
-        if (method.startsWith("workspace-state.")) return undefined;
-        throw new Error(`Unexpected mission owner RPC ${method}`);
-      },
+  const missionOwnerWire = {
+    call: async (_target: string, method: string) => {
+      if (method === "authority.verifyAuthorityPlan") return missionPolicy;
+      if (method.startsWith("workspace-state.")) return undefined;
+      throw new Error(`Unexpected mission owner RPC ${method}`);
     },
-  });
+  };
+  missionOwner.instance.setRpcCallForTest(missionOwnerWire.call);
   const resource = await createTestDO(TestNewsAgentWorker, {
     WORKER_SOURCE: "workers/news-agent",
     WORKER_CLASS_NAME: "NewsAgentWorker",
@@ -562,7 +558,7 @@ describe("NewsAgentWorker", () => {
       briefingIntervalMs: 3_600_000,
       timezone: "Europe/Berlin",
     })).toMatchObject({ briefingIntervalMs: 3_600_000 });
-    const missions = await worker.missionOwner!.callAs<MissionRecord[]>(
+    const missions = await worker.missionOwner!.callAs(
       { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
       "list",
     );
@@ -583,7 +579,7 @@ describe("NewsAgentWorker", () => {
       briefingIntervalMs: 24 * 3_600_000,
       briefingPaused: false,
     });
-    const defaults = await owner.callAs<MissionRecord[]>(user, "list");
+    const defaults = await owner.callAs(user, "list");
     const defaultPoll = defaults.find((m) => m.name === "Refresh News")!;
     const defaultBriefing = defaults.find((m) => m.name === "News briefing")!;
     expect(defaultPoll.charter.trigger).toEqual({
@@ -609,7 +605,7 @@ describe("NewsAgentWorker", () => {
       timezone: "Europe/Berlin",
       briefingPaused: false,
     });
-    const missions = await owner.callAs<MissionRecord[]>(user, "list");
+    const missions = await owner.callAs(user, "list");
     expect(missions).toHaveLength(2);
     const poll = missions.find((m) => m.name === "Refresh News")!;
     const briefing = missions.find((m) => m.name === "News briefing")!;

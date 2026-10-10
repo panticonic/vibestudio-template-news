@@ -1,5 +1,7 @@
+import { createMissionsClient } from "@vibestudio/service-schemas/clients/missionsClient";
+import { modelSettingsRpcMethods } from "@workspace/model-catalog/rpc-contract";
 import { OperationNotice } from "@workspace/ui/feedback";
-import { createMissionsClient } from "@vibestudio/automation/mission";
+
 /**
  * News — a reader-first personal briefing app.
  *
@@ -90,7 +92,13 @@ import {
   type NewsDeepDiveRequested,
   type NewsSetupCardState,
 } from "@workspace/feeds/card-types";
-import { NEWS_METHODS } from "@workspace/feeds";
+import {
+  NEWS_METHODS,
+  newsArchiveSearchResultSchema,
+  newsArticlePageResultSchema,
+  newsBriefingHistoryResultSchema,
+  newsOverviewResultSchema,
+} from "@workspace/feeds";
 import {
   isNewsReaderDataEvent,
   newsAgentKey,
@@ -376,9 +384,9 @@ export default function NewsPanel() {
           if (service.kind !== "durable-object") {
             throw new Error("Model settings service is not a Durable Object");
           }
-          settings = await rpc.call<ModelSettingsSnapshot>(
+          settings = await rpc.call(
             service.targetId,
-            "getSettings",
+            modelSettingsRpcMethods["getSettings"],
             [],
           );
         } catch (error) {
@@ -451,40 +459,30 @@ export default function NewsPanel() {
         try {
           const [nextOverview, articleResult, savedResult, historyResult] =
             await Promise.all([
-              callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
-              refreshArticleWindow(
-                inboxRef.current.articles,
-                (cursor) =>
-                  callAgent(NEWS_METHODS.listArticles, {
-                    limit: 40,
-                    triagedOnly: true,
-                    ...(cursor ? { cursor } : {}),
-                  }) as Promise<{
-                    articles: ArticleRow[];
-                    hasMore?: boolean;
-                    nextCursor?: string;
-                  }>,
+              callAgent(NEWS_METHODS.getOverview, {}).then((value) =>
+                newsOverviewResultSchema.parse(value),
+              ),
+              refreshArticleWindow(inboxRef.current.articles, (cursor) =>
+                callAgent(NEWS_METHODS.listArticles, {
+                  limit: 40,
+                  triagedOnly: true,
+                  ...(cursor ? { cursor } : {}),
+                }).then((value) => newsArticlePageResultSchema.parse(value)),
               ),
               savedRef.current.status === "idle"
                 ? Promise.resolve(null)
-                : refreshArticleWindow(
-                    savedRef.current.articles,
-                    (cursor) =>
-                      callAgent(NEWS_METHODS.listArticles, {
-                        limit: 40,
-                        savedOnly: true,
-                        ...(cursor ? { cursor } : {}),
-                      }) as Promise<{
-                        articles: ArticleRow[];
-                        hasMore?: boolean;
-                        nextCursor?: string;
-                      }>,
+                : refreshArticleWindow(savedRef.current.articles, (cursor) =>
+                    callAgent(NEWS_METHODS.listArticles, {
+                      limit: 40,
+                      savedOnly: true,
+                      ...(cursor ? { cursor } : {}),
+                    }).then((value) =>
+                      newsArticlePageResultSchema.parse(value),
+                    ),
                   ),
               callAgent(NEWS_METHODS.getBriefingHistory, {
                 limit: 20,
-              }) as Promise<{
-                briefings: BriefingRow[];
-              }>,
+              }).then((value) => newsBriefingHistoryResultSchema.parse(value)),
             ]);
           setOverview(nextOverview);
           setInbox({
@@ -699,37 +697,33 @@ export default function NewsPanel() {
       briefings: [],
     });
     const timer = window.setTimeout(() => {
-      void (
-        callAgent(NEWS_METHODS.searchArchive, {
-          query: normalized,
-          limit: 60,
-        }) as Promise<{
-          query: string;
-          articles: ArticleRow[];
-          briefings: BriefingRow[];
-        }>
-      ).then(
-        (result) => {
-          if (!cancelled && result.query === normalized) {
-            setSearch({
-              status: "ready",
-              query: normalized,
-              articles: result.articles,
-              briefings: result.briefings,
-            });
-          }
-        },
-        (error) => {
-          if (!cancelled)
-            setSearch({
-              status: "error",
-              query: normalized,
-              articles: [],
-              briefings: [],
-              error: errorMessage(error),
-            });
-        },
-      );
+      void callAgent(NEWS_METHODS.searchArchive, {
+        query: normalized,
+        limit: 60,
+      })
+        .then((value) => newsArchiveSearchResultSchema.parse(value))
+        .then(
+          (result) => {
+            if (!cancelled && result.query === normalized) {
+              setSearch({
+                status: "ready",
+                query: normalized,
+                articles: result.articles,
+                briefings: result.briefings,
+              });
+            }
+          },
+          (error) => {
+            if (!cancelled)
+              setSearch({
+                status: "error",
+                query: normalized,
+                articles: [],
+                briefings: [],
+                error: errorMessage(error),
+              });
+          },
+        );
     }, 250);
     return () => {
       cancelled = true;

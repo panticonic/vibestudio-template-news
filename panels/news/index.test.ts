@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { durableObjectServiceFixture } from "@vibestudio/service-schemas/test-utils";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { createElement, type ReactNode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,10 +15,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-news-test",
   workers: {
-    resolveService: async () => ({
-      kind: "durable-object",
-      targetId: "do:model-settings",
-    }),
+    resolveService: async () => durableObjectServiceFixture("do:model-settings"),
   },
   openPanel: vi.fn(),
   panel: {
@@ -25,7 +24,10 @@ vi.mock("@workspace/runtime", () => ({
         args["channelName"] ? fixture.persistChannel() : Promise.resolve(),
     },
   },
-  rpc: { selfId: "panel:news-test", call: vi.fn() },
+  rpc: {
+    selfId: "panel:news-test",
+    call: schemaRpcMock({ call: vi.fn() }).call,
+  },
 }));
 vi.mock("@workspace/runtime/internal/diagnostics", () => ({
   recoveryCoordinator: {},

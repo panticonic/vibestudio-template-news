@@ -1,3 +1,5 @@
+import { durableObjectServiceFixture } from "@vibestudio/service-schemas/test-utils";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { createElement, type ReactNode } from "react";
 import {
   cleanup,
@@ -24,24 +26,21 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-reader",
   workers: {
-    resolveService: async () => ({
-      kind: "durable-object",
-      targetId: "models",
-    }),
+    resolveService: async () => durableObjectServiceFixture("models"),
   },
   credentials: { listStoredCredentials: async () => [] },
   openPanel: vi.fn(),
   panel: { stateArgs: { patch: vi.fn(async () => undefined) } },
   rpc: {
     selfId: "reader-panel",
-    call: async (
+    ...schemaRpcMock({ call: async (
       _target: string,
       method: string,
       args: unknown[],
       options?: { signal?: AbortSignal },
     ) => {
       if (method === "workers.resolveService")
-        return { kind: "durable-object", targetId: "missions" };
+        return durableObjectServiceFixture("missions");
       if (method === "observeChanges") {
         if (!(args[0] as { afterVersion?: string }).afterVersion)
           return { version: "initial" };
@@ -58,7 +57,7 @@ vi.mock("@workspace/runtime", () => ({
         });
       }
       return { defaultModel: "openai-codex:gpt-6-luna" };
-    },
+    } }),
   },
 }));
 vi.mock("@workspace/runtime/internal/diagnostics", () => ({

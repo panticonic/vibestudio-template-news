@@ -9,7 +9,8 @@
     "./card-types": "./src/card-types.ts"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.7.0"
+    "fast-xml-parser": "^5.7.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "vitest": "^3.2.7"

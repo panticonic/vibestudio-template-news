@@ -1,3 +1,4 @@
+import { createMissionsClient } from "@vibestudio/service-schemas/clients/missionsClient";
 import { Type } from "@panticonic/pi-ai";
 import { copyJson, type Context } from "@panticonic/pi-chord";
 import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
@@ -8,7 +9,6 @@ import type {
 import type { AgentProductMetadata } from "@workspace/agentic-core/agent-product-metadata";
 import { withRpcAbortSignal, type RpcClient } from "@vibestudio/rpc";
 import {
-  createMissionsClient,
   type MissionRecord,
   type MissionTrigger,
 } from "@vibestudio/automation/mission";
@@ -1100,6 +1100,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       typeof result === "object" &&
       "error" in (result as Record<string, unknown>),
     );
+    if (!isError && op.outputSchema)
+      return { result: op.outputSchema.parse(result) };
     return isError ? { result, isError: true } : { result };
   }
 
@@ -1904,7 +1906,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       minutes = Number(match[1]) * 60 + Number(match[2]);
     }
     if (minutes !== undefined && briefingIntervalMs !== undefined)
-      throw new Error("Choose either briefingIntervalMs or a daily briefingAt.");
+      throw new Error(
+        "Choose either briefingIntervalMs or a daily briefingAt.",
+      );
     // Validate user input before provisioning or editing either owner row.
     const requestedTimezone = stringArg(args, "timezone");
     if (requestedTimezone) canonicalCronTimeZone(requestedTimezone);
