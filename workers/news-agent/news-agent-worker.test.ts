@@ -378,39 +378,6 @@ class TestNewsAgentWorker extends NewsAgentWorker {
   protected override callAgentHost = createMainRpcCaller(
     schemaRpcMock({
       call: async (_target, method) => {
-        const image = this.loadedImage();
-        if (method === "workspace-state.entity.resolveActive") {
-          return {
-            id: image.runtimeId,
-            authoritySessionId: "test-owner",
-            kind: "do",
-            source: { repoPath: image.source, effectiveVersion: "e".repeat(64) },
-            activeExecutionDigest: image.executionDigest,
-            className: image.className,
-            key: image.objectKey,
-            contextId: "ctx-1",
-            createdAt: 1,
-            status: "active",
-            cleanupComplete: false,
-          };
-        }
-        if (method === "workspace-state.alarmSourceRegister")
-          return {
-            incarnation: "test-storage-incarnation",
-            entity: {
-              id: image.runtimeId,
-              authoritySessionId: "test-owner",
-              kind: "do",
-              source: { repoPath: image.source, effectiveVersion: "e".repeat(64) },
-              activeExecutionDigest: image.executionDigest,
-              className: image.className,
-              key: image.objectKey,
-              contextId: "ctx-1",
-              createdAt: 1,
-              status: "active",
-              cleanupComplete: false,
-            },
-          };
         if (method === "workspace-state.alarmSourcePublish") return "accepted";
         if (method === "authority.outstandingAcquisitions")
           return { receipts: [], next: null };
@@ -558,6 +525,15 @@ async function makeWorker() {
     WORKERD_BOOT_GENERATION: "1",
   }, {
     props: {
+      nativeOwner: {
+        runtimeId: "do:workers/news-agent:NewsAgentWorker:test-key",
+        contextId: "ctx-1",
+        authoritySessionId: "test-owner",
+        incarnation: "test-storage-incarnation",
+        generation: 1,
+        executionDigest: "e".repeat(64),
+        effectiveVersion: "e".repeat(64),
+      },
       stateArgs: null,
       image: {
         effectiveVersion: "e".repeat(64),
@@ -2052,10 +2028,13 @@ async function invokeNewsTool(
     const task = await harness.waitForTask(id, BACKGROUND_CONTEXT);
     if (task.state.outcome.status !== "completed")
       throw new Error("News task did not complete");
+    const outcome = task.state.outcome.result;
+    if (outcome.kind !== "direct")
+      throw new Error("News tool has no direct terminal result");
     const result = await conversation.entries(
       {
-        minEntryId: task.state.outcome.result.entryId,
-        maxEntryId: task.state.outcome.result.entryId,
+        minEntryId: outcome.entryId,
+        maxEntryId: outcome.entryId,
       },
       1,
       undefined,

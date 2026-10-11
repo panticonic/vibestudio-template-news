@@ -341,7 +341,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
           { omitUndefinedProperties: true },
         );
         return {
-          content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+          output: [{ type: "text", text: JSON.stringify(details, null, 2) }],
           details,
         };
       },
