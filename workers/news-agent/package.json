@@ -159,10 +159,10 @@
     "@panticonic/pi-durable": "1.1.0-vibestudio.1",
     "@workspace/agentic-core": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/automation": "workspace:*"
+    "@vibestudio/automation": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*"
   },
   "devDependencies": {
-    "@vibestudio/service-schemas": "workspace:*",
     "vitest": "^3.2.7",
     "@workspace-workers/missions": "workspace:*",
     "@vibestudio/durable": "workspace:*"

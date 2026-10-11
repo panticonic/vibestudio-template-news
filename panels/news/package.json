@@ -199,11 +199,11 @@
     "react-markdown": "^9.1.0",
     "remark-gfm": "^4.0.1",
     "@workspace/testkit": "workspace:*",
-    "@vibestudio/automation": "workspace:*"
+    "@vibestudio/automation": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*"
   },
   "devDependencies": {
     "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/service-schemas": "workspace:*",
     "@testing-library/react": "^16.3.2",
     "vitest": "^3.2.7",
     "@testing-library/dom": "^10.0.0",
