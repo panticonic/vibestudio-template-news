@@ -9,7 +9,7 @@ import { createTestDO as createMissionOwner } from "@vibestudio/durable/test-uti
 import { MissionsDO } from "@workspace-workers/missions";
 import type { MissionRecord } from "@vibestudio/automation/mission";
 import { createNativeVesselTestDO as createTestDO } from "@workspace/agentic-do/testing/native-vessel";
-import { createNativeChannelProvider } from "@workspace/agentic-do/testing/native-channel-provider";
+import { createNativeChannelProvider } from "@workspace/testkit/native-channel-provider";
 import type { ChannelEndpoint } from "@workspace/pubsub";
 import { createModels, fauxProvider } from "@panticonic/pi-ai";
 import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
