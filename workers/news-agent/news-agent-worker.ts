@@ -1,7 +1,7 @@
 import { createMissionsClient } from "@vibestudio/service-schemas/clients/missionsClient";
 import { Type } from "@panticonic/pi-ai";
 import { copyJson, type Context } from "@panticonic/pi-chord";
-import { BACKGROUND_CONTEXT } from "@panticonic/pi-chord/context";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@panticonic/pi-chord/context";
 import type {
   ToolRegistration,
   SettledSubmissionRecord,
@@ -721,7 +721,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
           }),
         },
         { steeringId, domain: { kind: "news.briefing", data: { briefingId } } },
-        { ...BACKGROUND_CONTEXT, abortSignal: effects?.signal },
+        effects?.signal ? withAbortSignal(effects.signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1086,7 +1086,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     }
     const effects = this.boundNewsEffects(
       withRpcAbortSignal(this.rpc, signal),
-      { ...BACKGROUND_CONTEXT, abortSignal: signal },
+      withAbortSignal(signal, BACKGROUND_CONTEXT),
     );
     if (op.needsRecovery) await this.ensureRecovered(channelId, effects);
     signal.throwIfAborted();
