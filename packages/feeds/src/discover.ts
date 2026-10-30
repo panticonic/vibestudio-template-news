@@ -7,6 +7,8 @@
  * rarely well-formed XML, and we only need the autodiscovery <link> tags.
  */
 
+import { resolveHttpUrl } from "./http-url.js";
+
 const FEED_LINK_TYPES = new Set([
   "application/rss+xml",
   "application/atom+xml",
@@ -20,9 +22,9 @@ const TYPE_RE = /\btype\s*=\s*["']([^"']+)["']/i;
 const HREF_RE = /\bhref\s*=\s*["']([^"']+)["']/i;
 
 /**
- * Return the best feed URL advertised by an HTML page (absolutized against
- * `baseUrl`), or null if the page advertises none. Prefers RSS, then Atom,
- * then JSON feeds.
+ * Return the best http(s) feed URL advertised by an HTML page (absolutized
+ * against `baseUrl`), or null if the page advertises none. Prefers RSS, then
+ * Atom, then JSON feeds.
  */
 export function discoverFeedUrl(html: string, baseUrl: string): string | null {
   const candidates: Array<{ href: string; type: string }> = [];
@@ -45,11 +47,9 @@ export function discoverFeedUrl(html: string, baseUrl: string): string | null {
 
   const priority = (type: string) => (type.includes("rss") ? 0 : type.includes("atom") ? 1 : 2);
   for (const candidate of candidates.sort((a, b) => priority(a.type) - priority(b.type))) {
-    try {
-      return new URL(candidate.href, baseUrl).toString();
-    } catch {
-      // A broken advertisement must not hide another usable feed on the page.
-    }
+    // A broken or non-web advertisement must not hide another usable feed on the page.
+    const url = resolveHttpUrl(candidate.href, baseUrl);
+    if (url) return url;
   }
   return null;
 }

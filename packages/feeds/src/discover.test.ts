@@ -27,6 +27,22 @@ describe("discoverFeedUrl", () => {
     expect(discoverFeedUrl(html, "https://example.com")).toBe("https://example.com/atom.xml");
   });
 
+  it("never yields a non-web feed URL, falling through to a usable http(s) advertisement", () => {
+    const html = `<head>
+      <link rel="alternate" type="application/rss+xml" href="file:///etc/passwd">
+      <link rel="alternate" type="application/rss+xml" href="data:application/rss+xml,&lt;rss/&gt;">
+      <link rel="alternate" type="application/atom+xml" href="javascript:alert(1)">
+      <link rel="alternate" type="application/feed+json" href="http://192.168.1.20/feed.json">
+    </head>`;
+    expect(discoverFeedUrl(html, "http://192.168.1.20/")).toBe("http://192.168.1.20/feed.json");
+    expect(
+      discoverFeedUrl(
+        `<head><link rel="alternate" type="application/rss+xml" href="feed://example.com/rss"></head>`,
+        "https://example.com"
+      )
+    ).toBeNull();
+  });
+
   it("ignores non-feed alternate links and returns null when none match", () => {
     const html = `<head>
       <link rel="alternate" hreflang="fr" href="/fr">

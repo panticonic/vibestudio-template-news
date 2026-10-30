@@ -5,6 +5,7 @@ export {
   type FeedItem,
 } from "./parse.js";
 export { discoverFeedUrl } from "./discover.js";
+export { resolveHttpUrl } from "./http-url.js";
 export { parseOpml, type OpmlFeed } from "./opml.js";
 export { canonicalizeUrl, articleId, titleSimilarityKey } from "./canonical.js";
 export {

@@ -6,9 +6,13 @@
  */
 
 import { XMLParser } from "fast-xml-parser";
+import { resolveHttpUrl } from "./http-url.js";
 
 export interface FeedItem {
-  /** Item link, absolutized against the feed URL when relative. */
+  /**
+   * Item link, absolutized against the feed URL when relative. Always http(s):
+   * items whose link resolves to any other scheme are dropped.
+   */
   url: string;
   title: string;
   /** Plain-text-ish summary/description when the feed provides one. */
@@ -24,7 +28,7 @@ export interface FeedItem {
 
 export interface ParsedFeed {
   title?: string;
-  /** Feed-declared site link. */
+  /** Feed-declared site link (http(s) only, absolutized like item links). */
   link?: string;
   items: FeedItem[];
 }
@@ -105,15 +109,6 @@ function parseDate(value: string | undefined): number | undefined {
   return Number.isNaN(ms) ? undefined : ms;
 }
 
-function absolutize(url: string | undefined, baseUrl?: string): string | undefined {
-  if (!url) return undefined;
-  try {
-    return new URL(url, baseUrl).toString();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Strip tags and collapse whitespace for summaries that arrive as HTML. */
 function stripHtml(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -137,7 +132,7 @@ function parseRss(rss: Record<string, unknown>, baseUrl?: string): ParsedFeed {
   const items: FeedItem[] = [];
   for (const raw of asArray(channel["item"])) {
     const item = raw as Record<string, unknown>;
-    const url = absolutize(text(item["link"]), baseUrl);
+    const url = resolveHttpUrl(text(item["link"]), baseUrl);
     const title = text(item["title"]);
     if (!url || !title) continue;
     const guidNode = item["guid"];
@@ -153,7 +148,7 @@ function parseRss(rss: Record<string, unknown>, baseUrl?: string): ParsedFeed {
   }
   return {
     title: text(channel["title"]),
-    link: absolutize(text(channel["link"]), baseUrl),
+    link: resolveHttpUrl(text(channel["link"]), baseUrl),
     items,
   };
 }
@@ -165,7 +160,7 @@ function parseRdf(rdf: Record<string, unknown>, baseUrl?: string): ParsedFeed {
   const items: FeedItem[] = [];
   for (const raw of asArray(rdf["item"])) {
     const item = raw as Record<string, unknown>;
-    const url = absolutize(text(item["link"]), baseUrl);
+    const url = resolveHttpUrl(text(item["link"]), baseUrl);
     const title = text(item["title"]);
     if (!url || !title) continue;
     items.push({
@@ -178,7 +173,7 @@ function parseRdf(rdf: Record<string, unknown>, baseUrl?: string): ParsedFeed {
   }
   return {
     title: text(channel["title"]),
-    link: absolutize(text(channel["link"]), baseUrl),
+    link: resolveHttpUrl(text(channel["link"]), baseUrl),
     items,
   };
 }
@@ -206,7 +201,7 @@ function parseAtom(feed: Record<string, unknown>, baseUrl?: string): ParsedFeed 
   const items: FeedItem[] = [];
   for (const raw of asArray(feed["entry"])) {
     const entry = raw as Record<string, unknown>;
-    const url = absolutize(atomLink(entry["link"]), baseUrl);
+    const url = resolveHttpUrl(atomLink(entry["link"]), baseUrl);
     const title = text(entry["title"]);
     if (!url || !title) continue;
     const authorNode = entry["author"];
@@ -226,7 +221,7 @@ function parseAtom(feed: Record<string, unknown>, baseUrl?: string): ParsedFeed 
   }
   return {
     title: text(feed["title"]),
-    link: absolutize(atomLink(feed["link"]), baseUrl),
+    link: resolveHttpUrl(atomLink(feed["link"]), baseUrl),
     items,
   };
 }
@@ -249,7 +244,7 @@ function parseJsonFeed(body: string, baseUrl?: string): ParsedFeed {
   for (const raw of asArray(doc["items"] as unknown[])) {
     if (!isRecord(raw)) continue;
     const item = raw;
-    const url = absolutize(
+    const url = resolveHttpUrl(
       typeof item["url"] === "string" ? (item["url"] as string) : undefined,
       baseUrl
     );
@@ -278,7 +273,10 @@ function parseJsonFeed(body: string, baseUrl?: string): ParsedFeed {
   }
   return {
     title: typeof doc["title"] === "string" ? (doc["title"] as string) : undefined,
-    link: typeof doc["home_page_url"] === "string" ? (doc["home_page_url"] as string) : undefined,
+    link: resolveHttpUrl(
+      typeof doc["home_page_url"] === "string" ? (doc["home_page_url"] as string) : undefined,
+      baseUrl
+    ),
     items,
   };
 }

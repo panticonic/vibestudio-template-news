@@ -818,6 +818,51 @@ describe("NewsAgentWorker", () => {
     );
   });
 
+  it("subscribes to any http(s) feed, self-hosted ones included, and refuses other schemes on every add path", async () => {
+    const worker = await makeWorker();
+    for (const url of [
+      "file:///etc/passwd",
+      "data:application/rss+xml,<rss/>",
+      "javascript:alert(1)",
+    ]) {
+      expect(await worker.addFeed("ch-1", { url })).toMatchObject({
+        error: expect.stringContaining("only http(s) feed URLs are supported"),
+      });
+    }
+    expect(
+      await worker.importOpml("ch-1", {
+        opml: `<opml><body><outline xmlUrl="file:///etc/passwd" /></body></opml>`,
+      }),
+    ).toMatchObject({ imported: 0, failed: 1, total: 1 });
+    expect(worker.rowsForTest(`SELECT url FROM news_feeds`)).toEqual([]);
+
+    const selfHosted = "http://192.168.1.20:8080/feed.xml";
+    worker.feedResponses.set(selfHosted, [
+      {
+        status: 200,
+        body: rss([
+          { title: "Self-hosted post", link: "/posts/1" },
+          { title: "Script link", link: "javascript:alert(1)" },
+          { title: "Inline document", link: "data:text/html,hi" },
+          { title: "Local file", link: "file:///etc/passwd" },
+        ]),
+      },
+    ]);
+    expect(await worker.addFeed("ch-1", { url: selfHosted })).toMatchObject({
+      url: selfHosted,
+      itemCount: 1,
+      newArticles: 1,
+    });
+    expect(worker.rowsForTest(`SELECT url FROM news_feeds`)).toEqual([
+      { url: selfHosted },
+    ]);
+    expect(
+      worker
+        .rowsForTest(`SELECT title FROM news_articles`)
+        .map((row) => row["title"]),
+    ).toEqual(["Self-hosted post"]);
+  });
+
   it("applies growing backoff to failing feeds and recovers on success", async () => {
     const worker = await makeWorker();
     await addExampleFeed(worker, [

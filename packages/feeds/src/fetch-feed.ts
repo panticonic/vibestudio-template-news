@@ -4,6 +4,8 @@
  * that polls external HTTP resources.
  */
 
+import { resolveHttpUrl } from "./http-url.js";
+
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface FetchFeedOptions {
@@ -24,7 +26,15 @@ export type FetchFeedResult =
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_USER_AGENT = "Vibestudio-Feeds/0.1 (+https://vibestudio.dev)";
 
+/**
+ * Fetch a feed over http(s). Every subscription path (pasted URL, OPML import,
+ * autodiscovered link, scheduled poll) reaches the network through here, so
+ * any other scheme is refused before the transport sees it.
+ */
 export async function fetchFeed(url: string, options: FetchFeedOptions = {}): Promise<FetchFeedResult> {
+  if (!resolveHttpUrl(url)) {
+    return { status: "error", error: "only http(s) feed URLs are supported" };
+  }
   const fetcher = options.fetcher ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);

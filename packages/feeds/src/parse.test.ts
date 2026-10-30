@@ -151,6 +151,88 @@ describe("parseFeed", () => {
     expect(feed.items).toHaveLength(1);
   });
 
+  it("keeps only http(s) links, resolving relative ones, across every feed format", () => {
+    const hostile = [
+      "javascript:alert(1)",
+      " JavaScript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "file:///etc/passwd",
+      "vscode://open?file=/tmp/x",
+    ];
+    const xmlItems = (tag: "item" | "entry") =>
+      hostile
+        .map((link, i) =>
+          tag === "item"
+            ? `<item><title>hostile ${i}</title><link><![CDATA[${link}]]></link></item>`
+            : `<entry><title>hostile ${i}</title><link rel="alternate" href="${link
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")}"/></entry>`
+        )
+        .join("");
+
+    const rss = parseFeed(
+      `<rss><channel><title>Mixed</title><link>javascript:alert(0)</link>
+        <item><title>web</title><link>https://example.com/web</link></item>
+        <item><title>self-hosted</title><link>http://192.168.1.20:8080/post</link></item>
+        <item><title>relative</title><link>../relative</link></item>
+        ${xmlItems("item")}
+      </channel></rss>`,
+      undefined,
+      "https://example.com/feeds/main.xml"
+    );
+    expect(rss.items.map((item) => item.url)).toEqual([
+      "https://example.com/web",
+      "http://192.168.1.20:8080/post",
+      "https://example.com/relative",
+    ]);
+    expect(rss.link).toBeUndefined();
+
+    const rdf = parseFeed(
+      `<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <channel><title>RDF</title><link>/home</link></channel>
+        <item><title>ok</title><link>https://example.com/ok</link></item>
+        ${xmlItems("item")}
+      </rdf:RDF>`,
+      undefined,
+      "https://example.com/rdf"
+    );
+    expect(rdf.items.map((item) => item.url)).toEqual(["https://example.com/ok"]);
+    expect(rdf.link).toBe("https://example.com/home");
+
+    const atom = parseFeed(
+      `<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom</title>
+        <link rel="alternate" href="data:text/html,site"/>
+        <entry><title>ok</title><link href="/posts/1"/></entry>
+        ${xmlItems("entry")}
+      </feed>`,
+      undefined,
+      "https://example.org/atom.xml"
+    );
+    expect(atom.items.map((item) => item.url)).toEqual(["https://example.org/posts/1"]);
+    expect(atom.link).toBeUndefined();
+
+    const json = parseFeed(
+      JSON.stringify({
+        version: "https://jsonfeed.org/version/1.1",
+        home_page_url: "/",
+        items: [
+          { id: "ok", url: "https://example.net/ok", title: "ok" },
+          ...hostile.map((url, i) => ({ id: `hostile-${i}`, url, title: `hostile ${i}` })),
+        ],
+      }),
+      "application/feed+json",
+      "https://example.net/feed.json"
+    );
+    expect(json.items.map((item) => item.url)).toEqual(["https://example.net/ok"]);
+    expect(json.link).toBe("https://example.net/");
+    const hostileHome = JSON.stringify({
+      version: "https://jsonfeed.org/version/1",
+      home_page_url: "javascript:alert(1)",
+      items: [],
+    });
+    expect(parseFeed(hostileHome).link).toBeUndefined();
+  });
+
   it("tolerates items missing optional fields", () => {
     const feed = parseFeed(RSS2);
     const bare = feed.items.find((i) => i.title === "Relative link story");

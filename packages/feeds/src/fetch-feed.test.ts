@@ -41,6 +41,39 @@ describe("fetchFeed", () => {
     expect(result).toMatchObject({ status: "error", httpStatus: 503 });
   });
 
+  it("refuses non-http(s) feed URLs before the transport sees them", async () => {
+    const requested: string[] = [];
+    const fetcher = stubFetcher((url) => {
+      requested.push(url);
+      return new Response("<rss/>", { status: 200 });
+    });
+    for (const url of [
+      "file:///etc/passwd",
+      "data:application/rss+xml,<rss/>",
+      "javascript:alert(1)",
+      "ftp://example.com/feed.xml",
+      "example.com/feed.xml",
+    ]) {
+      expect(await fetchFeed(url, { fetcher })).toEqual({
+        status: "error",
+        error: "only http(s) feed URLs are supported",
+      });
+    }
+    expect(requested).toEqual([]);
+  });
+
+  it("fetches self-hosted http feeds on localhost and the LAN", async () => {
+    const requested: string[] = [];
+    const fetcher = stubFetcher((url) => {
+      requested.push(url);
+      return new Response("<rss/>", { status: 200 });
+    });
+    for (const url of ["http://localhost:8080/feed.xml", "http://192.168.1.20/rss", "https://nas.local/atom"]) {
+      expect(await fetchFeed(url, { fetcher })).toMatchObject({ status: "ok", body: "<rss/>" });
+    }
+    expect(requested).toEqual(["http://localhost:8080/feed.xml", "http://192.168.1.20/rss", "https://nas.local/atom"]);
+  });
+
   it("maps network failures to error results", async () => {
     const result = await fetchFeed("https://example.com/feed", {
       fetcher: async () => {

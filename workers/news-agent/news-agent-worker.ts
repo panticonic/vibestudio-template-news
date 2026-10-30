@@ -30,6 +30,7 @@ import {
   parseFeed,
   parseOpml,
   fetchFeed,
+  resolveHttpUrl,
   type Fetcher,
 } from "@workspace/feeds";
 import {
@@ -1677,7 +1678,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       const url = stringArg(item, "url");
       const title = stringArg(item, "title");
       if (!url || !title) continue;
-      if (!isHttpUrl(url)) continue;
+      if (!resolveHttpUrl(url)) continue;
       if (isLikelySearchOrIndexUrl(url)) continue;
       let id: string;
       try {
@@ -2157,15 +2158,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
 // Keep the operations table honest: every operation must resolve at startup.
 void NEWS_OPERATIONS;
-
-function isHttpUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
 
 const SEARCH_ENGINE_HOSTS = new Set([
   "google.com",
