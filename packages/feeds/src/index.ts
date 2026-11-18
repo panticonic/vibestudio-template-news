@@ -36,3 +36,4 @@ export {
   type NewsBriefingHistoryResult,
   type NewsArchiveSearchResult,
 } from "./news-results.js";
+export { captureNewsReaderReadback } from "./workflow-readback.js";

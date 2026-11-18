@@ -79,3 +79,15 @@ from the setup card or with `setSchedule`.
 `setBriefingPaused` pauses scheduled briefings; feed polling and a manual "Brief
 me now" keep working. `refreshNow` polls immediately; with `briefing: true` it
 also runs a briefing without a notification.
+
+## Reviewing News readback
+
+`skills/news-workflows` provides a typed, read-only review of the reader
+window, triage, briefing evidence, analyst fork, and persisted schedule.
+`captureNewsReaderReadback` from `@workspace/feeds` projects overview,
+article pages, or an archive search from an already-assigned News
+participant. It preserves response identities and checks each response's
+channel and participant before passing the evidence to Natlang.
+
+Use the News participant's existing methods when an action must be applied.
+The review describes its observed state and cites the supplied receipts.

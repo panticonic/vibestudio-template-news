@@ -1,0 +1,7 @@
+{
+  "schema": "natlang.package/v2",
+  "name": "vibestudio-news-workflows",
+  "version": "0.1.0",
+  "serviceBinding": "explicit",
+  "targets": { "main": { "entry": "reviewNews.nl" } }
+}
