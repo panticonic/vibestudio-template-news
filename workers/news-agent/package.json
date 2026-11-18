@@ -135,6 +135,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "userland:workers/missions/missions.edit#*",
+          "resource": {
+            "kind": "exact",
+            "key": "mission:do:workers/missions:MissionsDO:workspace-missions"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        },
+        {
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "prefix",

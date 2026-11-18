@@ -1,0 +1,19 @@
+{
+  "name": "@workspace/news-live-evidence",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./live": "./live.ts"
+  },
+  "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
+    "@workspace/agentic-core": "workspace:*",
+    "@workspace/feeds": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
+    "@workspace/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@workspace/natlang": "workspace:*",
+    "vitest": "^3.2.7"
+  }
+}

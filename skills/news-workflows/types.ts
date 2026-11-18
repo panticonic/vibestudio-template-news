@@ -1,3 +1,5 @@
+import type { Untrusted } from "./newsTrust.js";
+
 export type NewsFinding = { code: string; evidenceIds: string[] };
 export type NewsReview = {
   status: "ready" | "attention" | "waiting" | "blocked";
@@ -113,3 +115,14 @@ export type NewsReviewRequest =
   | NewsBriefingEvidence
   | NewsDeepDiveEvidence
   | NewsScheduleEvidence;
+
+export type NewsLiveCheck =
+  | { kind: "reader"; view: "inbox" | "saved" | "backlog" }
+  | { kind: "reader"; view: "archive"; query: string }
+  | { kind: "schedule"; intent: NewsScheduleEvidence["intent"] };
+export type NewsLiveRequest = {
+  kind: "live";
+  goal: string;
+  checks: NewsLiveCheck[];
+};
+export type NewsWorkflowRequest = NewsReviewRequest | NewsLiveRequest;

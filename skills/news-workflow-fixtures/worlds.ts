@@ -301,7 +301,7 @@ function article(
   text: string,
   source: string,
 ): NewsTriageArticle {
-  return { id, headline, text, source };
+  return { id, headline: fixtureText(headline), text: fixtureText(text), source };
 }
 
 function triage(
@@ -584,9 +584,17 @@ function source(
   };
 }
 
+function fixtureText(value: string): NewsTriageArticle["text"] {
+  return value as NewsTriageArticle["text"];
+}
+
+type BriefingInput = Partial<Omit<NewsBriefingEvidence, "claims">> & {
+  claims?: { id: string; text: string }[];
+};
+
 function brief(
   goal: string,
-  data: Partial<NewsBriefingEvidence> = {},
+  { claims = [], ...data }: BriefingInput = {},
 ): NewsBriefingEvidence {
   return {
     kind: "briefing",
@@ -595,7 +603,7 @@ function brief(
     phase: "ready",
     declaredSourcesRead: 0,
     sources: [],
-    claims: [],
+    claims: claims.map(({ id, text }) => ({ id, text: fixtureText(text) })),
     previousClaimIds: [],
     mutedArticleIds: [],
     focus: "credibility",
@@ -1346,7 +1354,7 @@ const scheduleWorlds = [
 function digest(
   id: string,
   goal: string,
-  input: Partial<NewsBriefingEvidence>,
+  input: BriefingInput,
   status: NewsReview["status"],
   findings: NewsReview["findings"],
 ): NewsWorld {

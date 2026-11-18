@@ -11,3 +11,10 @@ This package turns the News reader skill and worker procedures into a readback w
 | Review schedules | Choose the intended lane and interpret its current delivery state without inferring a write. | Polls, briefing intervals, daily anchors and the pause flag come from the persisted owner readback. |
 
 Related cases carry source groups. Each world states a concrete user goal, evidence, and an independently authored verdict. The verifier compares qualified evidence and finding codes across the entire result and rejects missing, altered, reordered, or repeated effects where they matter.
+
+The live workflow reads an owned News participant through its existing channel
+methods. Setup and reader evidence come from the worker's persisted state.
+Schedule evidence is joined to the two exact Missions owner rows. The model
+delegates reader and schedule interpretation to the original subtrees and
+combines their findings in assignment order. Fixture operations, including
+changes to schedule and preferences, stay with the managed harness.

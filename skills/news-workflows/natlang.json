@@ -3,5 +3,8 @@
   "name": "vibestudio-news-workflows",
   "version": "0.1.0",
   "serviceBinding": "explicit",
+  "serviceScopes": {
+    "newsRead": ["reviewNews/reviewLiveNews/readNewsState.nl"]
+  },
   "targets": { "main": { "entry": "reviewNews.nl" } }
 }
