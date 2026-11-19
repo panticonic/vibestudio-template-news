@@ -82,7 +82,7 @@ also runs a briefing without a notification.
 
 ## Reviewing News readback
 
-`skills/news-workflows` provides a typed, read-only review of the reader
+[`reviewNews.nl`](../../skills/news-workflows/reviewNews.nl) provides a typed, read-only review of the reader
 window, triage, briefing evidence, analyst fork, and persisted schedule.
 `captureNewsReaderReadback` from `@workspace/feeds` projects overview,
 article pages, or an archive search from an already-assigned News
