@@ -120,9 +120,17 @@ export type NewsLiveCheck =
   | { kind: "reader"; view: "inbox" | "saved" | "backlog" }
   | { kind: "reader"; view: "archive"; query: string }
   | { kind: "schedule"; intent: NewsScheduleEvidence["intent"] };
+export type NewsCadenceChange =
+  | { kind: "poll"; intervalMs: number }
+  | { kind: "interval"; intervalMs: number }
+  | { kind: "daily"; at: string; timezone: string }
+  | { kind: "pause" }
+  | { kind: "resume" }
+  | null;
 export type NewsLiveRequest = {
   kind: "live";
   goal: string;
   checks: NewsLiveCheck[];
+  changeIndex?: number;
 };
 export type NewsWorkflowRequest = NewsReviewRequest | NewsLiveRequest;

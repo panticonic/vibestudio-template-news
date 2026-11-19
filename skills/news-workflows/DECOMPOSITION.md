@@ -18,3 +18,14 @@ Schedule evidence is joined to the two exact Missions owner rows. The model
 delegates reader and schedule interpretation to the original subtrees and
 combines their findings in assignment order. Fixture operations, including
 changes to schedule and preferences, stay with the managed harness.
+
+Cadence reconciliation starts by observing the curator and both installed
+Missions owners. The selected schedule check defines the user's authority.
+A reconciliation lambda reviews the current lane through the same schedule
+subtree used by read-only reviews, then delegates the decision to apply,
+hold, or confirm the existing state. The service enforces the assigned write
+bound, invokes the existing News operation, and reads the owners again.
+Reader and schedule interpretation then runs over the final observation.
+Qualification compares both snapshots and requires the other schedule lane,
+the pause flag, and the owner identities to survive edits that leave them
+outside the selected scope.

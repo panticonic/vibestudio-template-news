@@ -9,6 +9,7 @@ import {
 } from "@workspace/feeds";
 
 import type {
+  NewsCadenceChange,
   NewsLiveCheck,
   NewsLiveRequest,
   NewsReview,
@@ -34,6 +35,7 @@ type World = {
   checks: NewsLiveCheck[];
   expected: Expected[];
   setup: Operation[];
+  repair?: { index: number; before: string; write: boolean };
 };
 
 const missions = () => createMissionsClient(rpc);
@@ -76,12 +78,20 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     replayMode: "collect",
     deliveryMode: "resident",
   });
+  type Observation = NewsReaderEvidence | NewsScheduleEvidence;
   let started = false;
-  let observed: (NewsReaderEvidence | NewsScheduleEvidence)[] | undefined;
+  let initial: Observation[] | undefined;
+  let observed: Observation[] | undefined;
+  let finished = false;
+  let repairReceipt:
+    | { change: NewsCadenceChange; id: string | null }
+    | undefined;
+  const repair = world.repair;
   const request: NewsLiveRequest = {
     kind: "live",
     goal: world.goal,
     checks: world.checks,
+    ...(repair ? { changeIndex: repair.index } : {}),
   };
   async function call(method: string, args: Record<string, unknown>) {
     const timeout = AbortSignal.timeout(20_000);
@@ -92,7 +102,6 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     const value = unwrapChatMethodResult(
       await client.callMethod(participantId, method, args, {
         transportCallId: id,
-        timeoutMs: 15_000,
         signal: timeout,
       }).result,
     );
@@ -106,17 +115,15 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     };
   }
 
-  async function observe() {
-    if (started) throw new Error("Read the assigned News state once");
-    started = true;
-    observed = [];
+  async function readState() {
+    const observations: Observation[] = [];
     for (const check of world.checks) {
       if (check.kind === "reader") {
         const view =
           check.view === "archive"
             ? { kind: check.view, query: check.query }
             : { kind: check.view, cursors: [null] };
-        observed.push(
+        observations.push(
           await captureNewsReaderReadback(assignment, call, world.goal, view),
         );
         continue;
@@ -149,7 +156,7 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
           (trigger?.kind === "cron" ? trigger.timezone : undefined)
       )
         throw new Error("News overview and the exact Missions owners disagree");
-      observed.push({
+      observations.push({
         kind: "schedule",
         goal: world.goal,
         intent: check.intent,
@@ -182,8 +189,78 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
               : null,
       });
     }
+    return observations;
+  }
+
+  async function observe() {
+    if (started) throw new Error("Read the assigned News state once");
+    started = true;
+    initial = await readState();
+    if (!repair) observed = initial;
+    return structuredClone(initial);
+  }
+
+  function projection(change: NewsCadenceChange) {
+    switch (change?.kind) {
+      case "poll":
+        return {
+          method: NEWS_METHODS.setSchedule,
+          args: { pollIntervalMs: change.intervalMs },
+        };
+      case "interval":
+        return {
+          method: NEWS_METHODS.setSchedule,
+          args: { briefingIntervalMs: change.intervalMs },
+        };
+      case "daily":
+        return {
+          method: NEWS_METHODS.setSchedule,
+          args: { briefingAt: change.at, timezone: change.timezone },
+        };
+      case "pause":
+      case "resume":
+        return {
+          method: NEWS_METHODS.setBriefingPaused,
+          args: { paused: change.kind === "pause" },
+        };
+      default:
+        return null;
+    }
+  }
+
+  function assignedChange(): NewsCadenceChange {
+    if (!repair) return null;
+    const check = world.checks[repair.index];
+    if (check?.kind !== "schedule" || check.intent.kind === "manual")
+      throw new Error("Cadence repair requires an authorized schedule intent");
+    return check.intent;
+  }
+
+  async function finishCadence(change: NewsCadenceChange) {
+    if (!repair || !initial || finished)
+      throw new Error(
+        "Cadence reconciliation requires a fresh assigned observation",
+      );
+    const operation = projection(change);
+    if (
+      change !== null &&
+      (!operation ||
+        JSON.stringify(operation) !==
+          JSON.stringify(projection(assignedChange())))
+    )
+      throw new Error("Cadence choice exceeds the assigned change");
+    finished = true;
+    const receipt = operation
+      ? await call(operation.method, operation.args)
+      : null;
+    observed = await readState();
+    repairReceipt = {
+      change: change === null ? null : assignedChange(),
+      id: receipt?.id ?? null,
+    };
     return structuredClone(observed);
   }
+
   function reference(): NewsReview {
     if (!observed || observed.length !== world.expected.length)
       throw new Error("Missing News observations");
@@ -209,6 +286,82 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
       findings,
     };
   }
+  function matchesState(evidence: Observation, code: string | undefined) {
+    if (evidence.kind === "reader") {
+      return (
+        evidence.pages.length === 1 &&
+        evidence.overview.articleCount === 0 &&
+        evidence.pages[0]?.articleIds.length === 0 &&
+        evidence.overview.setup ===
+          (code === "preferences-needed"
+            ? "needs-user-preferences"
+            : "configured")
+      );
+    }
+    const { intent, poll, briefing, owner } = evidence;
+    switch (intent.kind) {
+      case "manual":
+        return code === "manual-available" && owner.paused;
+      case "pause":
+        return (
+          code === (owner.paused ? "pause-confirmed" : "pause-state-mismatch")
+        );
+      case "resume":
+        return (
+          code === (owner.paused ? "pause-state-mismatch" : "resume-confirmed")
+        );
+      case "poll":
+        return code === "poll-interval-too-short"
+          ? intent.intervalMs < 60_000
+          : poll !== null &&
+              (poll.intervalMs === intent.intervalMs) ===
+                (code === "poll-confirmed");
+      case "interval":
+        return code === "briefing-interval-too-short"
+          ? intent.intervalMs < 600_000
+          : briefing !== null &&
+              (briefing.kind === "interval" &&
+                briefing.intervalMs === intent.intervalMs) ===
+                (code === "briefing-confirmed");
+      case "daily":
+        return (
+          briefing !== null &&
+          (briefing.kind === "daily" &&
+            briefing.at === intent.at &&
+            briefing.timezone === intent.timezone) ===
+            (code === "briefing-confirmed")
+        );
+    }
+  }
+
+  function matchesRepair() {
+    if (!repair) return true;
+    const before = initial?.[repair.index];
+    const after = observed?.[repair.index];
+    if (
+      before?.kind !== "schedule" ||
+      after?.kind !== "schedule" ||
+      !repairReceipt ||
+      !matchesState(before, repair.before) ||
+      before.owner.id === after.owner.id ||
+      before.poll?.id !== after.poll?.id ||
+      before.briefing?.id !== after.briefing?.id
+    )
+      return false;
+    const change = repairReceipt.change;
+    return (
+      repair.write === Boolean(repairReceipt.id) &&
+      (change?.kind === "poll" ||
+        before.poll?.intervalMs === after.poll?.intervalMs) &&
+      (change?.kind === "daily" ||
+        change?.kind === "interval" ||
+        JSON.stringify(before.briefing) === JSON.stringify(after.briefing)) &&
+      (change?.kind === "pause" ||
+        change?.kind === "resume" ||
+        before.owner.paused === after.owner.paused)
+    );
+  }
+
   function verify(report: NewsReview | null) {
     const expected = observed ? reference() : null;
     const checks = {
@@ -226,55 +379,20 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
         }),
       ),
       matchesState:
-        observed?.every((evidence, index) => {
-          const code = world.expected[index]?.code;
-          if (evidence.kind === "reader") {
-            return (
-              evidence.pages.length === 1 &&
-              evidence.overview.articleCount === 0 &&
-              evidence.pages[0]?.articleIds.length === 0 &&
-              evidence.overview.setup ===
-                (code === "preferences-needed"
-                  ? "needs-user-preferences"
-                  : "configured")
-            );
-          }
-          const { intent, poll, briefing, owner } = evidence;
-          switch (intent.kind) {
-            case "manual":
-              return code === "manual-available" && owner.paused;
-            case "pause":
-              return code === "pause-confirmed" && owner.paused;
-            case "resume":
-              return code === "resume-confirmed" && !owner.paused;
-            case "poll":
-              return code === "poll-interval-too-short"
-                ? intent.intervalMs < 60_000
-                : poll !== null &&
-                    (poll.intervalMs === intent.intervalMs) ===
-                      (code === "poll-confirmed");
-            case "interval":
-              return code === "briefing-interval-too-short"
-                ? intent.intervalMs < 600_000
-                : briefing !== null &&
-                    (briefing.kind === "interval" &&
-                      briefing.intervalMs === intent.intervalMs) ===
-                      (code === "briefing-confirmed");
-            case "daily":
-              return (
-                briefing !== null &&
-                (briefing.kind === "daily" &&
-                  briefing.at === intent.at &&
-                  briefing.timezone === intent.timezone) ===
-                  (code === "briefing-confirmed")
-              );
-          }
-        }) === true,
+        observed?.every((evidence, index) =>
+          matchesState(evidence, world.expected[index]?.code),
+        ) === true,
+      ...(repair ? { matchesRepair: matchesRepair() } : {}),
     };
     return {
       caseId: world.id,
       assignment,
       observed,
+      ...(repair
+        ? {
+            repair: { before: initial?.[repair.index], receipt: repairReceipt },
+          }
+        : {}),
       expected,
       checks,
       passed: Object.values(checks).every(Boolean),
@@ -282,7 +400,12 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
   }
   return {
     request,
-    services: { newsRead: { observe } },
+    services: { newsRead: { observe, finishCadence } },
+    async qualify() {
+      await observe();
+      if (repair) await finishCadence(repair.write ? assignedChange() : null);
+      return reference();
+    },
     reference,
     verify,
     async seed() {
