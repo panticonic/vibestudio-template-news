@@ -10,6 +10,8 @@ import {
 
 import type {
   NewsCadenceChange,
+  NewsCadenceSnapshot,
+  NewsReaderSelection,
   NewsLiveCheck,
   NewsLiveRequest,
   NewsReview,
@@ -17,7 +19,7 @@ import type {
   NewsScheduleEvidence,
 } from "../../skills/news-workflows/types.js";
 
-type Assignment = {
+export type NewsOwner = {
   contextId: string;
   channelId: string;
   channelTargetId: string;
@@ -25,7 +27,7 @@ type Assignment = {
   agentKey: string;
 };
 type Expected = { status: NewsReview["status"]; code: string };
-type Operation = {
+export type NewsSeedOperation = {
   method: "news_set_preferences" | "setSchedule" | "setBriefingPaused";
   args: Record<string, unknown>;
 };
@@ -34,12 +36,12 @@ type World = {
   goal: string;
   checks: NewsLiveCheck[];
   expected: Expected[];
-  setup: Operation[];
+  setup: NewsSeedOperation[];
   repair?: { index: number; before: string; write: boolean };
 };
 
 const missions = () => createMissionsClient(rpc);
-function newsOwners(assignment: Assignment) {
+function newsOwners(assignment: NewsOwner) {
   const prefix = `news:${assignment.agentKey}:${assignment.channelId}:`;
   return Promise.all([
     missions().getDefault(prefix + "poll"),
@@ -47,7 +49,7 @@ function newsOwners(assignment: Assignment) {
   ]);
 }
 
-export async function retireNewsOwners(assignment: Assignment) {
+export async function retireNewsOwners(assignment: NewsOwner) {
   const owners = await newsOwners(assignment);
   const client = missions();
   const results = await Promise.allSettled(
@@ -66,7 +68,7 @@ export async function retireNewsOwners(assignment: Assignment) {
   );
 }
 
-export function prepareLiveNews(assignment: Assignment, world: World) {
+export function openNewsTransport(assignment: NewsOwner) {
   const { contextId, channelId, channelTargetId, participantId } = assignment;
   const client = connectViaRpc({
     rpc,
@@ -78,21 +80,6 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     replayMode: "collect",
     deliveryMode: "resident",
   });
-  type Observation = NewsReaderEvidence | NewsScheduleEvidence;
-  let started = false;
-  let initial: Observation[] | undefined;
-  let observed: Observation[] | undefined;
-  let finished = false;
-  let repairReceipt:
-    | { change: NewsCadenceChange; id: string | null }
-    | undefined;
-  const repair = world.repair;
-  const request: NewsLiveRequest = {
-    kind: "live",
-    goal: world.goal,
-    checks: world.checks,
-    ...(repair ? { changeIndex: repair.index } : {}),
-  };
   async function call(method: string, args: Record<string, unknown>) {
     const timeout = AbortSignal.timeout(20_000);
     await client.ready(timeout);
@@ -115,79 +102,146 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     };
   }
 
+  async function observeCadence(): Promise<NewsCadenceSnapshot> {
+    const [poll, briefing] = await newsOwners(assignment);
+    const receipt = await call(NEWS_METHODS.getOverview, {});
+    const { setup } = newsOverviewResultSchema.parse(receipt.value);
+    const trigger = briefing?.charter.trigger;
+    const daily =
+      trigger?.kind === "cron"
+        ? /^(\d+) (\d+) \* \* \*$/u.exec(trigger.expression)
+        : null;
+    const at = daily
+      ? `${daily[2]!.padStart(2, "0")}:${daily[1]!.padStart(2, "0")}`
+      : null;
+    const minutes = daily
+      ? Number(daily[2]) * 60 + Number(daily[1])
+      : undefined;
+    const pollTrigger = poll?.charter.trigger;
+    const expectedPoll =
+      pollTrigger?.kind === "schedule" ? pollTrigger.everyMs : undefined;
+    const expectedInterval =
+      trigger?.kind === "schedule" ? trigger.everyMs : undefined;
+    if (
+      setup.pollIntervalMs !== expectedPoll ||
+      setup.briefingIntervalMs !== expectedInterval ||
+      setup.briefingAtMinutes !== minutes ||
+      setup.briefingPaused !== (!briefing || briefing.state !== "active") ||
+      setup.timezone !==
+        (trigger?.kind === "cron" ? trigger.timezone : undefined)
+    )
+      throw new Error("News overview and the exact Missions owners disagree");
+    return {
+      owner: {
+        id: receipt.id,
+        paused: setup.briefingPaused,
+        mode: "curator",
+      },
+      poll:
+        poll && expectedPoll !== undefined
+          ? { id: poll.missionId, intervalMs: expectedPoll }
+          : null,
+      briefing:
+        briefing && trigger?.kind === "schedule"
+          ? {
+              id: briefing.missionId,
+              kind: "interval",
+              intervalMs: trigger.everyMs,
+              at: null,
+              timezone: null,
+            }
+          : briefing && trigger?.kind === "cron" && at
+            ? {
+                id: briefing.missionId,
+                kind: "daily",
+                intervalMs: null,
+                at,
+                timezone: trigger.timezone,
+              }
+            : null,
+    };
+  }
+
+  function readReader(goal: string, selection: NewsReaderSelection) {
+    return captureNewsReaderReadback(
+      assignment,
+      call,
+      goal,
+      selection.kind === "archive"
+        ? selection
+        : { kind: selection.kind, cursors: [null] },
+    );
+  }
+
+  return { call, observeCadence, readReader, close: () => client.close() };
+}
+
+export function newsCadenceOperation(change: NewsCadenceChange) {
+  switch (change?.kind) {
+    case "poll":
+      return {
+        method: NEWS_METHODS.setSchedule,
+        args: { pollIntervalMs: change.intervalMs },
+      };
+    case "interval":
+      return {
+        method: NEWS_METHODS.setSchedule,
+        args: { briefingIntervalMs: change.intervalMs },
+      };
+    case "daily":
+      return {
+        method: NEWS_METHODS.setSchedule,
+        args: { briefingAt: change.at, timezone: change.timezone },
+      };
+    case "pause":
+    case "resume":
+      return {
+        method: NEWS_METHODS.setBriefingPaused,
+        args: { paused: change.kind === "pause" },
+      };
+    default:
+      return null;
+  }
+}
+
+export function prepareLiveNews(assignment: NewsOwner, world: World) {
+  const { call, observeCadence, readReader, close } =
+    openNewsTransport(assignment);
+  type Observation = NewsReaderEvidence | NewsScheduleEvidence;
+  let started = false;
+  let initial: Observation[] | undefined;
+  let observed: Observation[] | undefined;
+  let finished = false;
+  let repairReceipt:
+    | { change: NewsCadenceChange; id: string | null }
+    | undefined;
+  const repair = world.repair;
+  const request: NewsLiveRequest = {
+    kind: "live",
+    goal: world.goal,
+    checks: world.checks,
+    ...(repair ? { changeIndex: repair.index } : {}),
+  };
   async function readState() {
     const observations: Observation[] = [];
     for (const check of world.checks) {
       if (check.kind === "reader") {
-        const view =
-          check.view === "archive"
-            ? { kind: check.view, query: check.query }
-            : { kind: check.view, cursors: [null] };
         observations.push(
-          await captureNewsReaderReadback(assignment, call, world.goal, view),
+          await readReader(
+            world.goal,
+            check.view === "archive"
+              ? { kind: "archive", query: check.query }
+              : { kind: check.view },
+          ),
         );
-        continue;
+      } else {
+        observations.push({
+          kind: "schedule",
+          goal: world.goal,
+          intent: check.intent,
+          ...(await observeCadence()),
+        });
       }
-      const [poll, briefing] = await newsOwners(assignment);
-      const receipt = await call(NEWS_METHODS.getOverview, {});
-      const { setup } = newsOverviewResultSchema.parse(receipt.value);
-      const trigger = briefing?.charter.trigger;
-      const daily =
-        trigger?.kind === "cron"
-          ? /^(\d+) (\d+) \* \* \*$/u.exec(trigger.expression)
-          : null;
-      const at = daily
-        ? `${daily[2]!.padStart(2, "0")}:${daily[1]!.padStart(2, "0")}`
-        : null;
-      const minutes = daily
-        ? Number(daily[2]) * 60 + Number(daily[1])
-        : undefined;
-      const pollTrigger = poll?.charter.trigger;
-      const expectedPoll =
-        pollTrigger?.kind === "schedule" ? pollTrigger.everyMs : undefined;
-      const expectedInterval =
-        trigger?.kind === "schedule" ? trigger.everyMs : undefined;
-      if (
-        setup.pollIntervalMs !== expectedPoll ||
-        setup.briefingIntervalMs !== expectedInterval ||
-        setup.briefingAtMinutes !== minutes ||
-        setup.briefingPaused !== (!briefing || briefing.state !== "active") ||
-        setup.timezone !==
-          (trigger?.kind === "cron" ? trigger.timezone : undefined)
-      )
-        throw new Error("News overview and the exact Missions owners disagree");
-      observations.push({
-        kind: "schedule",
-        goal: world.goal,
-        intent: check.intent,
-        owner: {
-          id: receipt.id,
-          paused: setup.briefingPaused,
-          mode: "curator",
-        },
-        poll:
-          poll && expectedPoll !== undefined
-            ? { id: poll.missionId, intervalMs: expectedPoll }
-            : null,
-        briefing:
-          briefing && trigger?.kind === "schedule"
-            ? {
-                id: briefing.missionId,
-                kind: "interval",
-                intervalMs: trigger.everyMs,
-                at: null,
-                timezone: null,
-              }
-            : briefing && trigger?.kind === "cron" && at
-              ? {
-                  id: briefing.missionId,
-                  kind: "daily",
-                  intervalMs: null,
-                  at,
-                  timezone: trigger.timezone,
-                }
-              : null,
-      });
     }
     return observations;
   }
@@ -198,34 +252,6 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
     initial = await readState();
     if (!repair) observed = initial;
     return structuredClone(initial);
-  }
-
-  function projection(change: NewsCadenceChange) {
-    switch (change?.kind) {
-      case "poll":
-        return {
-          method: NEWS_METHODS.setSchedule,
-          args: { pollIntervalMs: change.intervalMs },
-        };
-      case "interval":
-        return {
-          method: NEWS_METHODS.setSchedule,
-          args: { briefingIntervalMs: change.intervalMs },
-        };
-      case "daily":
-        return {
-          method: NEWS_METHODS.setSchedule,
-          args: { briefingAt: change.at, timezone: change.timezone },
-        };
-      case "pause":
-      case "resume":
-        return {
-          method: NEWS_METHODS.setBriefingPaused,
-          args: { paused: change.kind === "pause" },
-        };
-      default:
-        return null;
-    }
   }
 
   function assignedChange(): NewsCadenceChange {
@@ -241,12 +267,12 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
       throw new Error(
         "Cadence reconciliation requires a fresh assigned observation",
       );
-    const operation = projection(change);
+    const operation = newsCadenceOperation(change);
     if (
       change !== null &&
       (!operation ||
         JSON.stringify(operation) !==
-          JSON.stringify(projection(assignedChange())))
+          JSON.stringify(newsCadenceOperation(assignedChange())))
     )
       throw new Error("Cadence choice exceeds the assigned change");
     finished = true;
@@ -412,6 +438,17 @@ export function prepareLiveNews(assignment: Assignment, world: World) {
       for (const operation of world.setup)
         await call(operation.method, operation.args);
     },
-    close: () => client.close(),
+    close,
   };
 }
+
+export type {
+  NewsCadenceSnapshot,
+  NewsGoalApply,
+  NewsGoalChange,
+  NewsReaderEvidence,
+  NewsReaderSelection,
+  NewsReview,
+  NewsScheduleIntent,
+  NewsUserGoalReport,
+} from "../../skills/news-workflows/types.js";

@@ -3,7 +3,7 @@ description: Inspect real News state and combine the assigned reader and cadence
 args:
   request: NewsLiveRequest
 returns: NewsReview
-uses: [reviewNews/readReader, reviewNews/reviewSchedule]
+uses: [reviewers/readReader, reviewers/reviewSchedule]
 ---
 1. Call readNewsState once. Retain the returned evidence for each assigned check.
 2. If changeIndex is present, take that schedule evidence item and call reconcileCadence with it. Replace the initial observations with its returned final readback.

@@ -12,3 +12,16 @@ declare module "natlang:services" {
     ): Promise<(NewsReaderEvidence | NewsScheduleEvidence)[]>;
   };
 }
+
+declare module "natlang:services" {
+  export const newsGoal: {
+    observeCadence(): Promise<import("./types.js").NewsCadenceSnapshot>;
+    readReader(
+      selection: import("./types.js").NewsReaderSelection,
+    ): Promise<NewsReaderEvidence>;
+    apply(
+      observationId: string,
+      change: import("./types.js").NewsGoalChange,
+    ): Promise<import("./types.js").NewsGoalApply>;
+  };
+}

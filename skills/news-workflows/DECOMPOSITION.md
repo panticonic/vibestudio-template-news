@@ -29,3 +29,19 @@ Reader and schedule interpretation then runs over the final observation.
 Qualification compares both snapshots and requires the other schedule lane,
 the pause flag, and the owner identities to survive edits that leave them
 outside the selected scope.
+
+## Goal-only News work
+
+The shared Vibestudio root mounts this installed package and offers
+`reviewUserNewsGoal` beside other workspace skills. The call receives the user
+goal. The schedule and reader observations come from the owned News participant
+and its actual Missions owners.
+
+| Procedure | Implementation |
+| --- | --- |
+| Select relevant reader views, comparisons, and any requested writes | The `planNewsGoal` child interprets the goal and the current cadence. |
+| Distinguish a missing preference, an empty view, and unfinished triage | The existing `reviewers/readReader` tree interprets each observed page. |
+| Check a cadence constraint before considering a write | The existing `reviewers/reviewSchedule` tree interprets the requested lane and its exact current state. |
+| Choose whether to apply a change, reread after a conflict, or keep the existing value | The reconciliation subtree calls the existing schedule reviewer for the observed and resulting states. |
+| Connect to the installed participant and protect its mutation boundary | TypeScript checks ownership, exact allowed lanes, current observation, and persistent readback. |
+| Verify the finished outcome | The managed test reads actual News and Mission state independently and checks the report against its bound receipts. Test goals, setup operations and outcome criteria stay separate. |

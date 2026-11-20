@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./live": "./live.ts"
+    "./live": "./live.ts",
+    "./open-goal": "./open-goal.ts"
   },
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",

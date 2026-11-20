@@ -3,7 +3,7 @@ description: Reconcile one expressly authorized cadence lane against persisted N
 args:
   input: NewsScheduleEvidence
 returns: (NewsReaderEvidence | NewsScheduleEvidence)[]
-uses: [reviewNews/reviewSchedule]
+uses: [reviewers/reviewSchedule]
 ---
 1. Call reviewSchedule with the initial evidence and retain its status.
 2. Call chooseCadenceChange with that status and the user's schedule intent.

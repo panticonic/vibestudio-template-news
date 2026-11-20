@@ -113,12 +113,12 @@ type NewsReviewRequest = | NewsReaderEvidence
 type NewsLiveCheck = | { kind: "reader"; view: "inbox" | "saved" | "backlog" }
   | { kind: "reader"; view: "archive"; query: string }
   | { kind: "schedule"; intent: NewsScheduleEvidence["intent"] };
-type NewsCadenceChange = | { kind: "poll"; intervalMs: number }
+type NewsGoalChange = | { kind: "poll"; intervalMs: number }
   | { kind: "interval"; intervalMs: number }
   | { kind: "daily"; at: string; timezone: string }
   | { kind: "pause" }
-  | { kind: "resume" }
-  | null;
+  | { kind: "resume" };
+type NewsCadenceChange = NewsGoalChange | null;
 type NewsLiveRequest = {
   kind: "live";
   goal: string;
@@ -126,5 +126,38 @@ type NewsLiveRequest = {
   changeIndex?: number;
 };
 type NewsWorkflowRequest = NewsReviewRequest | NewsLiveRequest;
-declare const fn: NatlangFunction<[request: NewsWorkflowRequest], NewsReview> & { readonly readReader: NatlangFunction<[input: NewsReaderEvidence], NewsReview> & { readonly diagnoseReaderState: NatlangFunction<[input: NewsReaderEvidence], NewsReview | null>; readonly inspectReaderPages: NatlangFunction<[input: NewsReaderEvidence], NewsReview> }; readonly reviewDeepDive: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview> & { readonly examineAnalysis: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview>; readonly traceAnalystFork: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview | null> }; readonly reviewLiveNews: NatlangFunction<[request: NewsLiveRequest], NewsReview> & { readonly readNewsState: NatlangFunction<[], (NewsReaderEvidence | NewsScheduleEvidence)[]>; readonly reconcileCadence: NatlangFunction<[input: NewsScheduleEvidence], (NewsReaderEvidence | NewsScheduleEvidence)[]> & { readonly chooseCadenceChange: NatlangFunction<[review: NewsReview, input: NewsScheduleEvidence], NewsCadenceChange>; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> } }; readonly readReader: NatlangFunction<[input: NewsReaderEvidence], NewsReview> & { readonly diagnoseReaderState: NatlangFunction<[input: NewsReaderEvidence], NewsReview | null>; readonly inspectReaderPages: NatlangFunction<[input: NewsReaderEvidence], NewsReview> }; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> } }; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> }; readonly synthesizeBriefing: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> & { readonly groundDevelopments: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> & { readonly buildDigestPlan: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> }; readonly inspectBriefingPhase: NatlangFunction<[input: NewsBriefingEvidence], NewsReview | null>; readonly qualifyPrimaryReads: NatlangFunction<[input: NewsBriefingEvidence], NewsReview | null> }; readonly triageStories: NatlangFunction<[input: NewsTriageEvidence], NewsReview> & { readonly classifyTriageBatch: NatlangFunction<[input: NewsTriageEvidence], NewsFinding | null>; readonly reconcileCoverage: NatlangFunction<[input: NewsTriageEvidence], NewsFinding> } };
+type NewsCadenceSnapshot = {
+  owner: NewsScheduleEvidence["owner"];
+  poll: NewsScheduleEvidence["poll"];
+  briefing: NewsScheduleEvidence["briefing"];
+};
+type NewsReaderSelection = | { kind: "inbox" | "saved" | "backlog" }
+  | { kind: "archive"; query: string };
+type NewsScheduleIntent = NewsScheduleEvidence["intent"];
+type NewsGoalPlan = {
+  readers: NewsReaderSelection[];
+  changes: NewsScheduleIntent[];
+  checks: NewsScheduleIntent[];
+};
+type NewsGoalApply = {
+  status: "applied" | "state-changed" | "unchanged" | "denied";
+  cadence: NewsCadenceSnapshot;
+};
+type NewsGoalScheduleFinding = {
+  intent: NewsScheduleIntent;
+  review: NewsReview;
+};
+type NewsGoalCadenceResult = {
+  cadence: NewsCadenceSnapshot;
+  blocked: boolean;
+  changed: boolean;
+  findings: NewsGoalScheduleFinding[];
+};
+type NewsUserGoalReport = {
+  status: "reviewed" | "changed" | "blocked";
+  cadence: NewsCadenceSnapshot;
+  readers: { selection: NewsReaderSelection; review: NewsReview }[];
+  schedule: NewsGoalScheduleFinding[];
+};
+declare const fn: NatlangFunction<[request: NewsWorkflowRequest], NewsReview> & { readonly reviewDeepDive: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview> & { readonly examineAnalysis: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview>; readonly traceAnalystFork: NatlangFunction<[input: NewsDeepDiveEvidence], NewsReview | null> }; readonly reviewLiveNews: NatlangFunction<[request: NewsLiveRequest], NewsReview> & { readonly readNewsState: NatlangFunction<[], (NewsReaderEvidence | NewsScheduleEvidence)[]>; readonly reconcileCadence: NatlangFunction<[input: NewsScheduleEvidence], (NewsReaderEvidence | NewsScheduleEvidence)[]> & { readonly chooseCadenceChange: NatlangFunction<[review: NewsReview, input: NewsScheduleEvidence], NewsCadenceChange>; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> } }; readonly readReader: NatlangFunction<[input: NewsReaderEvidence], NewsReview> & { readonly diagnoseReaderState: NatlangFunction<[input: NewsReaderEvidence], NewsReview | null>; readonly inspectReaderPages: NatlangFunction<[input: NewsReaderEvidence], NewsReview> }; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> } }; readonly synthesizeBriefing: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> & { readonly groundDevelopments: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> & { readonly buildDigestPlan: NatlangFunction<[input: NewsBriefingEvidence], NewsReview> }; readonly inspectBriefingPhase: NatlangFunction<[input: NewsBriefingEvidence], NewsReview | null>; readonly qualifyPrimaryReads: NatlangFunction<[input: NewsBriefingEvidence], NewsReview | null> }; readonly triageStories: NatlangFunction<[input: NewsTriageEvidence], NewsReview> & { readonly classifyTriageBatch: NatlangFunction<[input: NewsTriageEvidence], NewsFinding | null>; readonly reconcileCoverage: NatlangFunction<[input: NewsTriageEvidence], NewsFinding> }; readonly readReader: NatlangFunction<[input: NewsReaderEvidence], NewsReview> & { readonly diagnoseReaderState: NatlangFunction<[input: NewsReaderEvidence], NewsReview | null>; readonly inspectReaderPages: NatlangFunction<[input: NewsReaderEvidence], NewsReview> }; readonly reviewSchedule: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> & { readonly chooseMissionLane: NatlangFunction<[input: NewsScheduleEvidence], NewsReview | null>; readonly inspectCadence: NatlangFunction<[input: NewsScheduleEvidence], NewsReview> } };
 export default fn;
