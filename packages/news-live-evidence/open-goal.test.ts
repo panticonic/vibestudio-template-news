@@ -200,3 +200,15 @@ it("requires the current participant evidence for verified reader findings", asy
       .verifiedReaderViews,
   ).toBe(false);
 });
+
+it("accepts a recovered authorized outcome after harmless rejected attempts", async () => {
+  const harness = fixture(cadenceChange);
+  await harness.seed();
+  const current = await harness.services.newsGoal.observeCadence();
+  expect((await harness.services.newsGoal.apply(current.owner.id, { kind: "resume" })).status).toBe("denied");
+  expect((await harness.services.newsGoal.apply("stale-observation", appointment)).status).toBe("state-changed");
+  const result = await harness.qualify();
+  expect(result.passed, JSON.stringify(result.checks)).toBe(true);
+  expect(result.attempts.length).toBeGreaterThan(2);
+  expect(result.latest.poll?.intervalMs).toBe(poll.intervalMs);
+});

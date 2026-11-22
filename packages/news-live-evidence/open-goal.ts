@@ -376,16 +376,9 @@ export function bindOpenGoalNews(
           ),
         ),
       verifiedAuthorizedChanges:
-        !attempts.some((entry) => entry.status === "denied") &&
-        applied.every((entry) => Boolean(entry.receipt)) &&
-        isDeepStrictEqual(
-          applied.map(({ change }) => change),
-          world.applied,
-        ) &&
-        (!world.concurrent ||
-          (Boolean(concurrentReceipt) &&
-            attempts[0]?.status === "state-changed" &&
-            attempts[1]?.status === "applied")),
+        applied.every((entry) => Boolean(entry.receipt) && permitsChange(entry.change) &&
+          world.grants.includes(grantFor(entry.change))) &&
+        (!world.concurrent || Boolean(concurrentReceipt)),
       reportedDisposition: report?.status === world.outcome,
     };
     return {
