@@ -1,0 +1,26 @@
+[
+  {
+    "template": "news",
+    "entry": "skills/news-workflows/reviewUserNewsGoal.nl",
+    "resultType": "NewsUserGoalReport",
+    "decision": "retain requested domain value",
+    "fields": {
+      "status": "requested application value",
+      "cadence": "actual current schedule settings query/state",
+      "readers": "selected reader views and actual review findings",
+      "schedule": "requested schedule comparison/change findings"
+    },
+    "evidence": [
+      "skills/news-workflows/reviewUserNewsGoal.nl",
+      "skills/news-workflows/types.ts"
+    ],
+    "consumers": [
+      "/home/werg/vibe-app-values-news/skills/news-workflows/natlang.json:11:      \"reviewUserNewsGoal.nl\",",
+      "/home/werg/vibe-app-values-news/skills/news-workflows/natlang.json:12:      \"reviewUserNewsGoal/reconcileNewsGoal/reconcileNewsLane.nl\"",
+      "/home/werg/vibe-app-values-news/skills/news-workflows/DECOMPOSITION.md:36:`reviewUserNewsGoal` beside other workspace skills. The call receives the user"
+    ],
+    "nativeConsumers": [
+      "/home/werg/vibe-app-values-news/skills/news-workflows/types.ts:166:export type NewsUserGoalReport = {"
+    ]
+  }
+]
