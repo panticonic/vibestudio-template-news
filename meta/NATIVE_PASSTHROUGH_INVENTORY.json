@@ -1,0 +1,34 @@
+{
+  "schema": "natlang.native-passthrough-inventory/1",
+  "root": "/home/werg/data/vibestudio-open-goal-live/full-luna-campaign-yci2LB1N/rejection-audit/native-passthrough-news",
+  "rows": [
+    {
+      "path": "skills/news-workflows/reviewNews/reviewLiveNews/readNewsState.nl",
+      "line": 1,
+      "body_line": 6,
+      "source_sha256": "084d14973ba773593b1f452ab4c61659c2257b8d8033f7f5e85fef891431d1f6",
+      "service": "newsRead",
+      "method": "observe",
+      "arguments": "",
+      "status": "converted",
+      "reason": "Exact native service call, typed signature, no semantic judgment or child subtree",
+      "package": "skills/news-workflows",
+      "metadata": {
+        "description": "Read the assigned News participant and mission observations.",
+        "args": {},
+        "returns": "(NewsReaderEvidence | NewsScheduleEvidence)[]"
+      },
+      "output": "skills/news-workflows/reviewNews/reviewLiveNews/readNewsState.ts",
+      "generated": "import {newsRead} from \"natlang:services\";\nimport type {NewsReaderEvidence, NewsScheduleEvidence} from \"../../types.js\";\n/** Read the assigned News participant and mission observations. */\nexport default async function readNewsState():Promise<(NewsReaderEvidence | NewsScheduleEvidence)[]>{\n return newsRead.observe();\n}\n",
+      "source_body": "Call newsRead.observe once and return the actual evidence unchanged."
+    }
+  ],
+  "verification": {
+    "compiler": "actual VibeStudio compileProgram and workspaceModules, all affected packages plus every public entry root",
+    "packages": 81,
+    "aggregate_linked_files": 3708,
+    "ledger_unit": "native-passthrough-compile-20261123c",
+    "teacher_calls": 0,
+    "runtime_capture_dependency": "Deploy with Core native-service frame recording fix; raw service frame binding is insufficient."
+  }
+}

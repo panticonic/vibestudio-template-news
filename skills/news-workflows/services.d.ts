@@ -1,15 +1,9 @@
-import type {
-  NewsCadenceChange,
-  NewsReaderEvidence,
-  NewsScheduleEvidence,
-} from "./types.js";
-
 declare module "natlang:services" {
   export const newsRead: {
-    observe(): Promise<(NewsReaderEvidence | NewsScheduleEvidence)[]>;
+    observe(): Promise<(import("./types.js").NewsReaderEvidence | import("./types.js").NewsScheduleEvidence)[]>;
     finishCadence(
-      change: NewsCadenceChange,
-    ): Promise<(NewsReaderEvidence | NewsScheduleEvidence)[]>;
+      change: import("./types.js").NewsCadenceChange,
+    ): Promise<(import("./types.js").NewsReaderEvidence | import("./types.js").NewsScheduleEvidence)[]>;
   };
 }
 
@@ -18,7 +12,7 @@ declare module "natlang:services" {
     observeCadence(): Promise<import("./types.js").NewsCadenceSnapshot>;
     readReader(
       selection: import("./types.js").NewsReaderSelection,
-    ): Promise<NewsReaderEvidence>;
+    ): Promise<import("./types.js").NewsReaderEvidence>;
     apply(
       observationId: string,
       change: import("./types.js").NewsGoalChange,

@@ -5,7 +5,6 @@
   "serviceBinding": "explicit",
   "serviceScopes": {
     "newsRead": [
-      "reviewNews/reviewLiveNews/readNewsState.nl",
       "reviewNews/reviewLiveNews/reconcileCadence.nl"
     ],
     "newsGoal": [
