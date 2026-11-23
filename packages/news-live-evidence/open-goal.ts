@@ -1,3 +1,5 @@
+import type {InvocationObservations} from "@workspace-skills/system-testing/observed-invocation";
+import {assessSemanticOutcome,type SemanticOutcomeContract} from "@workspace-skills/system-testing/semantic-outcome-contract";
 import { isDeepStrictEqual } from "node:util";
 import {
   newsCadenceOperation,
@@ -300,7 +302,7 @@ export function bindOpenGoalNews(
     },
   };
 
-  async function verify(value: unknown) {
+  async function verify(value: unknown,invocation?:InvocationObservations) {
     const envelope = value as Outcome | null;
     const report =
       envelope;
@@ -378,7 +380,9 @@ export function bindOpenGoalNews(
         (!world.concurrent || Boolean(concurrentReceipt)),
       reportedDisposition: report?.status === world.outcome,
     };
-    return {
+    const contract:SemanticOutcomeContract={effects:{checks:["verifiedCadence", "verifiedAuthorizedChanges"],rationale:"Independent native observations, authority and persisted state establish application effects."},returnedValue:{checks:["readCurrentNews", "verifiedReaderViews", "groundedScheduleFindings", "reportedDisposition"],required:world.applied.length===0,rationale:"These are the actual requested domain findings or query values; mutation-only calls retain their separately observed effects."},incidentalValues:{checks:[],rationale:"Optional incorrect mutation returns are recorded against the actual invocation, without invalidating correct native effects."}};
+    const incorrectReturnValues=!contract.returnedValue.required&&contract.returnedValue.checks.some(name=>!(checks as Record<string,boolean>)[name])&&invocation ? (await invocation.returns(call=>call.parentCallId===null)).filter(row=>isDeepStrictEqual(row.value,value)).map(({definition,value})=>({definition,value,required:contract.returnedValue.required&&contract.returnedValue.checks.some(name=>!(checks as Record<string,boolean>)[name])})) : [];
+    return assessSemanticOutcome({incorrectReturnValues,
       goal,
       caseId,
       contextId,
@@ -390,7 +394,7 @@ export function bindOpenGoalNews(
       concurrentReceipt,
       checks,
       passed: Object.values(checks).every(Boolean),
-    };
+    },contract);
   }
 
   async function qualify() {
