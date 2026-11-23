@@ -217,6 +217,7 @@ export function bindOpenGoalNews(
   const attempts: Attempt[] = [];
   let concurrentReceipt: string | null = null;
   let busy = false;
+  let reading: Promise<NewsCadenceSnapshot> | undefined;
   async function captureCadence() {
     const snapshot = await port.observeCadence();
     observations.push(structuredClone(snapshot));
@@ -224,7 +225,10 @@ export function bindOpenGoalNews(
   }
   const services = {
     newsGoal: {
-      observeCadence: captureCadence,
+      observeCadence: () => {
+        reading ??= captureCadence().finally(()=>{reading=undefined});
+        return reading.then(snapshot=>structuredClone(snapshot));
+      },
       async readReader(selection: NewsReaderSelection) {
         if (
           !selection ||
@@ -251,7 +255,7 @@ export function bindOpenGoalNews(
           );
         busy = true;
         try {
-          const previous = observations.at(-1);
+          const previous = observations.find(row=>row.owner.id===observationId);
           const authorized =
             permitsChange(change) && world.grants.includes(grantFor(change));
           if (

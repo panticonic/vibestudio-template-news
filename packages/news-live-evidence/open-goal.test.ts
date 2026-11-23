@@ -212,3 +212,16 @@ it("accepts a recovered authorized outcome after harmless rejected attempts", as
   expect(result.attempts.length).toBeGreaterThan(2);
   expect(result.latest.poll?.intervalMs).toBe(poll.intervalMs);
 });
+
+it("accepts an issued cadence basis after another harmless observation and coalesces readonly calls",async()=>{
+ const world={...cadenceChange,concurrent:undefined};const bound=fixture(world);await bound.seed();
+ const [basis,duplicate]=await Promise.all([bound.services.newsGoal.observeCadence(),bound.services.newsGoal.observeCadence()]);
+ expect(basis.owner.id).toBe(duplicate.owner.id);expect(basis).not.toBe(duplicate);
+ await bound.services.newsGoal.observeCadence();
+ const result=await bound.services.newsGoal.apply(basis.owner.id,appointment);
+ expect(result.status).toBe("applied");expect(bound.methods).toEqual(["setSchedule"]);
+});
+it("does not authorize an invented cadence basis",async()=>{
+ const bound=fixture({...cadenceChange,concurrent:undefined});await bound.seed();await bound.services.newsGoal.observeCadence();
+ const result=await bound.services.newsGoal.apply("invented",appointment);expect(result.status).toBe("state-changed");expect(bound.methods).toEqual([]);
+});
