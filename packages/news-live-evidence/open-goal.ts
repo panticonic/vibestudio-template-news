@@ -41,11 +41,7 @@ type Attempt = {
   receipt: string | null;
 };
 type Read = { selection: NewsReaderSelection; evidence: NewsReaderEvidence };
-type Outcome = {
-  status: "workspace-skill-reviewed";
-  skill: "news";
-  outcome: NewsUserGoalReport;
-};
+type Outcome = NewsUserGoalReport;
 
 const cadenceState = (snapshot: NewsCadenceSnapshot) => ({
   mode: snapshot.owner.mode,
@@ -307,10 +303,7 @@ export function bindOpenGoalNews(
   async function verify(value: unknown) {
     const envelope = value as Outcome | null;
     const report =
-      envelope?.status === "workspace-skill-reviewed" &&
-      envelope.skill === "news"
-        ? envelope.outcome
-        : null;
+      envelope;
     const latest = await port.observeCadence();
     const [initial] = observations;
     const expectedChanges = world.concurrent
@@ -438,15 +431,11 @@ export function bindOpenGoalNews(
         ? "reviewed"
         : "changed";
     return verify({
-      status: "workspace-skill-reviewed",
-      skill: "news",
-      outcome: {
         status,
         cadence,
         readers,
         schedule,
-      },
-    } satisfies Outcome);
+      } satisfies Outcome);
   }
 
   return { goal, services, verify, qualify };

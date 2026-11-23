@@ -175,9 +175,6 @@ it("requires the current participant evidence for verified reader findings", asy
   const selection = { kind: "inbox" } as const;
   const evidence = await newsGoal.readReader(selection);
   const report = (id: string) => ({
-    status: "workspace-skill-reviewed",
-    skill: "news",
-    outcome: {
       status: "reviewed",
       cadence,
       schedule: [],
@@ -190,8 +187,7 @@ it("requires the current participant evidence for verified reader findings", asy
           },
         },
       ],
-    },
-  });
+    });
   expect((await harness.verify(report(evidence.overview.id))).passed).toBe(
     true,
   );
