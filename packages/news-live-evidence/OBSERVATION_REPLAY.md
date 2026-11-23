@@ -1,0 +1,3 @@
+# Repeatable native observations
+
+The operation-scoped initial News observation now shares one inflight native snapshot across repeated/concurrent reads and returns copies. It remains the initial snapshot used to compare an explicitly requested cadence repair with the independent final native state. A failed native read propagates and can be retried by a later explicit call. No write, setup, schedule, source/provider or final-state checks are removed. Repeated initial inspection does not repeat reader/cadence discovery or overwrite the final repair observation. Tests prove concurrent/repeated reads return the same evidence without allowing caller mutation to alter the original; existing native cadence/retry/foreign-scope checks still pass.

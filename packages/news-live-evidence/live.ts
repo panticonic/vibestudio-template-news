@@ -208,7 +208,7 @@ export function prepareLiveNews(assignment: NewsOwner, world: World) {
   const { call, observeCadence, readReader, close } =
     openNewsTransport(assignment);
   type Observation = NewsReaderEvidence | NewsScheduleEvidence;
-  let started = false;
+  let observationFlight: Promise<Observation[]> | undefined;
   let initial: Observation[] | undefined;
   let observed: Observation[] | undefined;
   let finished = false;
@@ -247,9 +247,9 @@ export function prepareLiveNews(assignment: NewsOwner, world: World) {
   }
 
   async function observe() {
-    if (started) throw new Error("Read the assigned News state once");
-    started = true;
-    initial = await readState();
+    const pending = observationFlight ??= readState();
+    try { initial = await pending; }
+    catch (error) { if (observationFlight === pending) observationFlight = undefined; throw error; }
     if (!repair) observed = initial;
     return structuredClone(initial);
   }
