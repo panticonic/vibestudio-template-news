@@ -8,7 +8,7 @@
       "reviewNews/reviewLiveNews/reconcileCadence.nl"
     ],
     "newsGoal": [
-      "reviewUserNewsGoal.nl",
+      "reviewUserNewsGoal.ts",
       "reviewUserNewsGoal/reconcileNewsGoal/reconcileNewsLane.nl"
     ]
   },

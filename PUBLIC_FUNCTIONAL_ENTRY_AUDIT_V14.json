@@ -1,0 +1,33 @@
+{
+  "publicEntries": 1,
+  "entries": [
+    {
+      "entry": "skills/news-workflows/reviewUserNewsGoal.ts",
+      "kind": "typed composition",
+      "rationale": "Typed native I/O, exact result composition and deterministic state transitions; scoped NL descendants interpret goals, choose actions, reconcile evidence and form requested answers.",
+      "sourceSha256": "2e8525455f0d98a5ee1db4a57addb4c229425cbd6094f23829d3166e07b6368c"
+    }
+  ],
+  "sourceConversions": [
+    {
+      "template": "news",
+      "old": "skills/news-workflows/reviewUserNewsGoal.nl",
+      "new": "skills/news-workflows/reviewUserNewsGoal.ts",
+      "originalSource": "---\ndescription: Diagnose or update a live News reader and its schedules under the user's requested scope.\nargs:\n  goal: string\nreturns: NewsUserGoalReport\nbudget: { maxTurns: 20 }\nuses: [reviewers/readReader, reviewers/reviewSchedule]\n---\n1. Observe the current News cadence with newsGoal.observeCadence. Call planNewsGoal with the user goal and that observation.\n2. When the plan requests changes, call reconcileNewsGoal with the goal, plan changes and the latest cadence. Keep its final cadence, change findings and blocked status. Otherwise keep the originally observed cadence.\n3. For each planned reader view, call newsGoal.readReader. Use readReader on the returned evidence to assess the view. Retain its selection and actual review.\n4. For each planned comparison, call reviewSchedule with the final cadence as schedule evidence, the original goal, and that comparison's intent. Return those findings with the change findings. Keep all evidence IDs and the final cadence exactly as observed. Return blocked if the requested change was blocked, changed if a write was confirmed, otherwise reviewed.\n",
+      "classification": "typed composition: actual native I/O and deterministic control flow; semantic choices remain in scoped NL descendants"
+    },
+    {
+      "template": "news",
+      "old": "skills/news-workflows/reviewUserNewsGoal/reconcileNewsGoal.nl",
+      "new": "skills/news-workflows/reviewUserNewsGoal/reconcileNewsGoal.ts",
+      "originalSource": "---\ndescription: Apply only the requested News changes, rereading each affected cadence from its owner.\nargs:\n  goal: string\n  changes: NewsScheduleIntent[]\n  cadence: NewsCadenceSnapshot\nreturns: NewsGoalCadenceResult\nbudget: { maxTurns: 20 }\n---\n1. Keep the latest cadence and an initially empty findings list.\n2. In order, call reconcileNewsLane with each change intent and current cadence. Append its exact finding and keep its latest cadence for the next instruction. Stop applying changes on a blocked result.\n3. Return the final cadence, whether a change was blocked, whether any write was confirmed, and the accumulated findings.\n",
+      "classification": "typed composition: actual native I/O and deterministic control flow; semantic choices remain in scoped NL descendants"
+    }
+  ],
+  "validation": {
+    "unit": "vibe-v14-local-nonbase-types-20261123c",
+    "scope": "Actual static native compilation and declaration regeneration of all38 discovered programs across six templates; no model execution or training data.",
+    "memoryPeakMiB": 287.7
+  },
+  "taskGoalsChanged": false
+}

@@ -1,7 +1,7 @@
 [
   {
     "template": "news",
-    "entry": "skills/news-workflows/reviewUserNewsGoal.nl",
+    "entry": "skills/news-workflows/reviewUserNewsGoal.ts",
     "resultType": "NewsUserGoalReport",
     "decision": "retain requested domain value",
     "fields": {
@@ -11,7 +11,7 @@
       "schedule": "requested schedule comparison/change findings"
     },
     "evidence": [
-      "skills/news-workflows/reviewUserNewsGoal.nl",
+      "skills/news-workflows/reviewUserNewsGoal.ts",
       "skills/news-workflows/types.ts"
     ],
     "consumers": [
@@ -21,6 +21,7 @@
     ],
     "nativeConsumers": [
       "/home/werg/vibe-app-values-news/skills/news-workflows/types.ts:166:export type NewsUserGoalReport = {"
-    ]
+    ],
+    "functionalStructure": "typed composition"
   }
 ]
