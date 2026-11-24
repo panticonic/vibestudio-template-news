@@ -11,7 +11,8 @@
     "@workspace/agentic-core": "workspace:*",
     "@workspace/feeds": "workspace:*",
     "@workspace/pubsub": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*",
+    "@workspace/application-outcomes": "workspace:*"
   },
   "devDependencies": {
     "@workspace/natlang": "workspace:*",

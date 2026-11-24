@@ -1,5 +1,5 @@
 import {isDeepStrictEqual} from "node:util";
-import type {ApplicationReturnContribution} from "@workspace-skills/system-testing/observed-application-outcome";
+import type {ApplicationReturnContribution} from "@workspace/application-outcomes/observed-application-outcome";
 /** Bind the authored concat(step.findings) and explicit schedule-review branches. */
 export function scheduleReturnContributions(schedule:readonly unknown[],changedReturns:readonly {value:unknown}[]):ApplicationReturnContribution[]{
  const findings=changedReturns.flatMap(row=>{
