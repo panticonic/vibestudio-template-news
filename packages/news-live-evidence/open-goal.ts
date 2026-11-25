@@ -1,5 +1,6 @@
 import {scheduleReturnContributions} from "./return-contributions.js";
-import {assessObservedApplicationOutcome} from "@workspace/application-outcomes/observed-application-outcome";
+import {bindObservedContentReview} from "@workspace/application-outcomes/observed-content-review";
+const assessObservedApplicationOutcome=bindObservedContentReview(["initial","latest","observations","reads","attempts","concurrentReceipt"]);
 import type {InvocationObservations} from "@workspace/application-outcomes/observed-invocation";
 import type {SemanticOutcomeContract} from "@workspace/application-outcomes/semantic-outcome-contract";
 import { isDeepStrictEqual } from "node:util";
@@ -22,6 +23,7 @@ type NewsInput = NewsOwner & { caseId: string };
 export type OpenNewsWorld = {
   id: string;
   goal: string;
+  requestedReturnRequired: boolean;
   setup: NewsSeedOperation[];
   grants: ("poll" | "briefing" | "pause")[];
   outcome: NewsUserGoalReport["status"];
@@ -325,11 +327,10 @@ export function bindOpenGoalNews(
     const checks = {
       readCurrentNews: Boolean(
         initial &&
-        report?.cadence &&
-        observations.some((value) =>
+        (!report?.cadence || (observations.some((value) =>
           isDeepStrictEqual(value, report.cadence),
         ) &&
-        sameCadence(report.cadence, latest),
+        sameCadence(report.cadence, latest))),
       ),
       verifiedCadence: Boolean(
         initial &&
@@ -338,21 +339,9 @@ export function bindOpenGoalNews(
         sameCadence(expectedState, latest),
       ),
       verifiedReaderViews:
-        readers.length === world.readers.length &&
-        world.readers.every(({ selection, code }) =>
-          readers.some(
-            (entry) =>
-              isDeepStrictEqual(entry?.selection, selection) &&
-              reads.some((read) => {
-                const actual = readerReview(read.evidence);
-                return (
-                  isDeepStrictEqual(read.selection, selection) &&
-                  actual?.findings[0]?.code === code &&
-                  isDeepStrictEqual(entry.review, actual)
-                );
-              }),
-          ),
-        ),
+        world.readers.every(({selection}) => reads.some(read => isDeepStrictEqual(read.selection,selection))) &&
+        readers.every(entry => reads.some(read => isDeepStrictEqual(read.selection,entry?.selection) &&
+          isDeepStrictEqual(entry.review,readerReview(read.evidence)))),
       groundedScheduleFindings:
         scheduled.every((entry) => {
           if (!entry?.intent) return false;
@@ -368,21 +357,13 @@ export function bindOpenGoalNews(
               ),
             )
           );
-        }) &&
-        world.schedule.every(({ intent, code }) =>
-          scheduled.some(
-            (entry) =>
-              isDeepStrictEqual(entry?.intent, intent) &&
-              entry.review?.findings?.[0]?.code === code,
-          ),
-        ),
+        }),
       verifiedAuthorizedChanges:
         applied.every((entry) => Boolean(entry.receipt) && permitsChange(entry.change) &&
           world.grants.includes(grantFor(entry.change))) &&
         (!world.concurrent || Boolean(concurrentReceipt)),
-      reportedDisposition: report?.status === world.outcome,
     };
-    const contract:SemanticOutcomeContract={effects:{checks:["verifiedCadence", "verifiedAuthorizedChanges"],rationale:"Independent native observations, authority and persisted state establish application effects."},returnedValue:{checks:["readCurrentNews", "verifiedReaderViews", "groundedScheduleFindings", "reportedDisposition"],required:world.applied.length===0,rationale:"These are the actual requested domain findings or query values; mutation-only calls retain their separately observed effects."},incidentalValues:{checks:[],rationale:"Optional incorrect mutation returns are recorded against the actual invocation, without invalidating correct native effects."}};
+    const contract:SemanticOutcomeContract={effects:{checks:["verifiedCadence", "verifiedAuthorizedChanges"],rationale:"Independent native observations, authority and persisted state establish application effects."},returnedValue:{checks:["readCurrentNews", "verifiedReaderViews", "groundedScheduleFindings"],required:world.requestedReturnRequired,rationale:"These are the actual requested domain findings or query values; mutation-only calls retain their separately observed effects."},incidentalValues:{checks:[],rationale:"Optional incorrect mutation returns are recorded against the actual invocation, without invalidating correct native effects."}};
 
     const changedReturns=invocation?await invocation.returns(call=>call.definition.source.endsWith("reviewUserNewsGoal/reconcileNewsGoal/reconcileNewsLane.nl")):[];
     const scheduleContributions=scheduleReturnContributions(scheduled,changedReturns);
@@ -399,7 +380,7 @@ export function bindOpenGoalNews(
       checks,
       passed: Object.values(checks).every(Boolean),
     },contract,value,invocation,[
-    {checks:["readCurrentNews","reportedDisposition"],rootPath:["cadence"],producerSourceSuffix:"reviewUserNewsGoal/reconcileNewsGoal/reconcileNewsLane.nl",producerPath:["cadence"]},
+    {checks:["readCurrentNews"],rootPath:["cadence"],producerSourceSuffix:"reviewUserNewsGoal/reconcileNewsGoal/reconcileNewsLane.nl",producerPath:["cadence"]},
     ...readers.map((_,index)=>({checks:["verifiedReaderViews"],rootPath:["readers",index,"review"],producerSourceSuffix:"reviewers/readReader.nl"})),
     ...scheduleContributions,
   ]);

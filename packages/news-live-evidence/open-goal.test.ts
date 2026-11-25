@@ -1,10 +1,16 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+// These live transports are not used by the injected owned-news port.
+vi.mock("@workspace/runtime",()=>({rpc:{}}));
+vi.mock("@workspace/pubsub",()=>({connectViaRpc:()=>{throw Error("unexpected live transport");}}));
+vi.mock("@workspace/agentic-core",()=>({unwrapChatMethodResult:(value:unknown)=>value}));
+vi.mock("@workspace/feeds",async()=>({captureNewsReaderReadback:()=>{throw Error("unexpected reader transport");},NEWS_METHODS:(await import("../feeds/src/news-methods.js")).NEWS_METHODS,newsOverviewResultSchema:{}}));
 import type { NewsCadenceSnapshot, NewsReaderSelection } from "./live.js";
 import { bindOpenGoalNews, type OpenNewsWorld } from "./open-goal.js";
 
 const newReader: OpenNewsWorld = {
   id: "new-reader",
   goal: "Find out whether my empty reader is configured.",
+  requestedReturnRequired: true,
   setup: [],
   grants: [],
   outcome: "reviewed",
@@ -22,6 +28,7 @@ const poll = { kind: "poll", intervalMs: 55 * 60_000 } as const;
 const cadenceChange: OpenNewsWorld = {
   id: "concurrent-cadence",
   goal: "Preserve the feed team's edit when moving the briefing.",
+  requestedReturnRequired: false,
   setup: [{ method: "setBriefingPaused", args: { paused: true } }],
   grants: ["briefing"],
   outcome: "changed",
@@ -220,4 +227,29 @@ it("accepts an issued cadence basis after another harmless observation and coale
 it("does not authorize an invented cadence basis",async()=>{
  const bound=fixture({...cadenceChange,concurrent:undefined});await bound.seed();await bound.services.newsGoal.observeCadence();
  const result=await bound.services.newsGoal.apply("invented",appointment);expect(result.status).toBe("state-changed");expect(bound.methods).toEqual([]);
+});
+
+it("reviews an additional accurate reader observation without a hidden report-count or disposition gate",async()=>{
+ const bound=fixture(newReader);await bound.seed();const {newsGoal}=bound.services;
+ const cadence=await newsGoal.observeCadence();
+ const selections=[{kind:"inbox"},{kind:"saved"}] as const;
+ const readers=[];
+ for(const selection of selections){const evidence=await newsGoal.readReader(selection);readers.push({selection,review:{status:"waiting",findings:[{code:"preferences-needed",evidenceIds:[evidence.overview.id]}]}});}
+ const report={status:"blocked",cadence,readers,schedule:[]};
+ const proof=await bound.verify(report);
+ expect(proof.passed).toBe(true);expect(proof.semanticReviewRequired).toBe(true);
+ expect(proof.semanticReviewInput.actual.requestedReturn).toEqual(report);
+ expect(proof.semanticReviewInput.actual.observations.reads).toHaveLength(2);
+ expect(proof.checks).not.toHaveProperty("reportedDisposition");
+});
+it("keeps explicitly requested findings required after a successful native change",async()=>{
+ const bound=fixture({...cadenceChange,requestedReturnRequired:true});await bound.seed();const proof=await bound.qualify();
+ expect(proof.outcomeContract.returnedValue.required).toBe(true);
+ expect(proof.semanticReviewInput.expected.requestedReturnRequired).toBe(true);
+ expect(proof.semanticReviewInput.actual.requestedReturn).not.toBeNull();
+});
+it("reviews pure native effects without turning an incidental report into a required answer",async()=>{
+ const bound=fixture(cadenceChange);await bound.seed();const proof=await bound.qualify();
+ expect(proof.passed).toBe(true);expect(proof.semanticReviewRequired).toBe(true);
+ expect(proof.semanticReviewInput.actual.requestedReturn).toBeNull();
 });
